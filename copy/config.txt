@@ -1,0 +1,2 @@
+STARTMESSAGE=欢迎使用本机器人！通过此机器人与我互相发送消息
+STARTIMG=none

@@ -1,0 +1,6 @@
+KEFUURL=https://t.me/xxxx
+JIAOCHENGPINDAO=https://t.me/xxxx
+OKPAYTOKEN=xxxx
+OKPAYID=xxxx
+COST=0.001
+COIN=USDT
