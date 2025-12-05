@@ -1,6 +1,12 @@
 <?php
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
+    
+    if (!$isSecure) {
+        die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法继续配置！</h2><p>Telegram Webhook 必须使用 HTTPS。请使用 HTTPS 重新访问此配置页面。</p></div>');
+    }
+
     $config = [
         'secret_token' => trim($_POST['secret_token'] ?? ''),
         'bot_token' => trim($_POST['bot_token'] ?? ''),
@@ -23,9 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $config['secret_token'] = bin2hex(random_bytes(16));
     }
     
-    $move_warning = '';
     $configDir = $config['config_dir'];
-    
     if (!is_dir($configDir)) {
         if (!mkdir($configDir, 0777, true)) {
             die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法创建配置目录 "' . htmlspecialchars($configDir) . '"，请检查服务器文件权限</h2></div>');
@@ -39,8 +43,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!rename($sourceConfigFile, $targetConfigFile)) {
             die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：配置目录已创建，但无法移动 config.txt 到 "' . htmlspecialchars($configDir) . '"。请检查文件权限或手动移动！</h2></div>');
         }
-    } else {
-        $move_warning = '<p class="mdui-text-color-orange">注意：根目录下未找到 config.txt 文件。假设您已手动移动或该文件不存在。</p>';
     }
 
     $botFile = 'bot.php';
@@ -70,13 +72,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     
     $copyBotFile = 'copy/bot.php';
-    $copyBotMessage = '';
     $copyBotSuccess = false;
+    $copyBotMessage = '';
 
     if (file_exists($copyBotFile)) {
         $copyContent = file_get_contents($copyBotFile);
         if ($copyContent === false) {
-            $copyBotMessage = '错误：无法读取 copy/bot.php 文件。';
+            die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法读取 copy/bot.php 文件。</h2></div>');
         } else {
             $mainDomainClean = rtrim($config['main_domain'], '/');
             
@@ -94,21 +96,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newCopyContent = str_replace(array_keys($copyReplacements), array_values($copyReplacements), $copyContent, $count);
             
             if (file_put_contents($copyBotFile, $newCopyContent) === false) {
-                $copyBotMessage = '错误：无法写入 copy/bot.php 文件，请检查文件权限。';
+                die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法写入 copy/bot.php 文件，请检查文件权限。</h2></div>');
             } else {
                 $copyBotSuccess = true;
-                $copyBotMessage = 'copy/bot.php 文件已成功配置。';
             }
         }
     } else {
-        $copyBotMessage = '警告：未找到 <code>copy/bot.php</code> 文件，跳过配置。';
         $copyBotSuccess = true;
     }
     
-    if (!$copyBotSuccess && strpos($copyBotMessage, '警告：') === false) {
-        die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">copy/bot.php 配置错误：</h2><p>' . $copyBotMessage . '</p></div>');
-    }
-
     $sqlFile = 'db.sql';
     $dbImportSuccess = false;
     $dbImportMessage = '';
@@ -120,13 +116,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $mysqli = @new mysqli($dbHost, $config['db_user'], $config['db_pass'], $config['db_name']);
 
         if ($mysqli->connect_error) {
-            $dbImportMessage = '连接数据库失败！请检查数据库信息和权限是否正确。错误信息: ' . $mysqli->connect_error;
+            die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">数据库连接错误：</h2><p>连接数据库失败！请检查数据库信息和权限是否正确。错误信息: ' . $mysqli->connect_error . '</p></div>');
         } else {
             $mysqli->set_charset('utf8mb4');
             
             if ($mysqli->multi_query($sqlContent)) {
                 $dbImportSuccess = true;
-                $dbImportMessage = 'db.sql 文件已成功导入到数据库。';
                 
                 do {
                     if ($result = $mysqli->store_result()) {
@@ -134,22 +129,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 } while ($mysqli->more_results() && $mysqli->next_result());
                 
+                if (!unlink($sqlFile)) {
+                    die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">文件清理错误：</h2><p>db.sql 文件已成功导入，但自动删除失败，请手动删除！</p></div>');
+                }
+                
             } else {
-                $dbImportMessage = 'SQL 导入失败！请检查 db.sql 文件格式或数据库用户权限。错误信息: ' . $mysqli->error;
+                die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">数据库导入错误：</h2><p>SQL 导入失败！请检查 db.sql 文件格式或数据库用户权限。错误信息: ' . $mysqli->error . '</p></div>');
             }
             $mysqli->close();
         }
     } else {
-        $dbImportMessage = '警告：根目录下未找到 <code>db.sql</code> 文件，跳过数据库导入。';
         $dbImportSuccess = true; 
     }
     
-    if (!$dbImportSuccess && strpos($dbImportMessage, '警告：') === false) {
-        die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">数据库导入错误：</h2><p>' . $dbImportMessage . '</p></div>');
-    }
-
     $webhookEndpoint = rtrim($config['main_domain'], '/') . '/bot.php';
-    
     $encodedWebhookEndpoint = rawurlencode($webhookEndpoint);
 
     $registrationUrl = 'https://api.telegram.org/bot' . 
@@ -159,41 +152,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                        '&secret_token=' . 
                        rawurlencode($config['secret_token']);
 
-    echo '<!DOCTYPE html><html><head><title>配置成功</title><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="https://unpkg.com/mdui@1.0.2/dist/css/mdui.min.css" /></head><body class="mdui-theme-primary-indigo mdui-theme-accent-pink mdui-container mdui-typo mdui-p-t-2">';
-    echo '<div class="mdui-card mdui-shadow-2 mdui-p-a-3"><h2 class="mdui-text-color-theme">🎉 配置成功！</h2>';
+    echo '<!DOCTYPE html><html><head><title>配置成功</title><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="https://unpkg.com/mdui@1.0.2/dist/css/mdui.min.css" /></head><body class="mdui-theme-primary-indigo mdui-theme-accent-pink mdui-container mdui-typo mdui-p-t-5">';
+    echo '<div class="mdui-card mdui-shadow-8 mdui-p-a-4 mdui-m-y-5" style="max-width: 600px; margin-left: auto; margin-right: auto; border-radius: 12px;">';
     
-    echo '<h3>1.注册 Webhook</h3>';
-    echo '<p>请复制以下链接，并在浏览器中打开此链接完成注册：</p>';
-    echo '<div class="mdui-textfield mdui-textfield-disabled"><label class="mdui-textfield-label">url</label><input class="mdui-textfield-input" type="text" value="' . htmlspecialchars($registrationUrl) . '"/></div>';
-    echo '<p class="mdui-text-color-red">现在请删除de.php文件</p><hr>';
+    echo '<h1 class="mdui-text-color-green mdui-text-center mdui-m-b-3"><i class="mdui-icon material-icons mdui-text-center" style="font-size: 48px;">check_circle</i><br>配置成功！</h1>';
+    echo '<p class="mdui-text-center mdui-typo-subheading">Bot 配置文件和数据库已完成配置与清理。</p>';
     
-    echo '<h3>2.数据库导入</h3>';
-    if ($dbImportSuccess && strpos($dbImportMessage, '警告：') === false) {
-        echo '<p class="mdui-text-color-green mdui-typo-subheading">🎉 数据库导入完成！</p>';
-    } else {
-        echo '<p class="mdui-text-color-red mdui-typo-subheading">⚠️ 数据库导入失败或警告！</p>';
-    }
-    echo '<p>' . $dbImportMessage . '</p>';
-    echo '<hr>';
+    echo '<hr class="mdui-m-y-4">';
     
-    echo '<h3>3.复制文件配置结果</h3>';
-    if ($copyBotSuccess && strpos($copyBotMessage, '警告：') === false) {
-        echo '<p class="mdui-text-color-green mdui-typo-subheading">🎉 ' . $copyBotMessage . '</p>';
-    } else {
-        echo '<p class="mdui-text-color-red mdui-typo-subheading">⚠️ ' . $copyBotMessage . '</p>';
-    }
-    echo '<hr>';
+    echo '<h3 class="mdui-m-b-2">下一步：注册 Webhook</h3>';
+    echo '<p>请点击下方按钮，在浏览器中打开 Webhook 注册链接，完成最后一步。</p>';
 
-    echo '<h3>4.配置文件移动结果</h3>';
-    echo '<p>配置目录 <code>' . htmlspecialchars($configDir) . '</code> 已创建。</p>';
-    if (!empty($move_warning)) {
-        echo $move_warning;
-    } else {
-        echo '<p class="mdui-text-color-green">文件 <code>config.txt</code> 已成功移动到新目录。</p>';
-    }
-    echo '<hr>';
-
-    echo '</div></body></html>';
+    echo '<div class="mdui-textfield mdui-textfield-disabled mdui-m-b-2"><label class="mdui-textfield-label">Webhook 注册链接</label><input class="mdui-textfield-input" type="text" id="webhook_url" value="' . htmlspecialchars($registrationUrl) . '"/></div>';
+    
+    echo '<a href="' . htmlspecialchars($registrationUrl) . '" target="_blank" class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent mdui-m-r-2" style="width: calc(50% - 10px);">一键打开注册链接</a>';
+    
+    echo '<button class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-blue" onclick="copyWebhookUrl()" style="width: calc(50% - 10px);">复制链接</button>';
+    
+    echo '<p class="mdui-text-color-red mdui-m-t-4 mdui-text-center">⚠️ 配置完成后请立即删除`de.php` 文件以确保安全！管理员需要到数据库user表中identity改为admin。</p>';
+    
+    echo '</div>';
+    
+    echo '<script>
+        function copyWebhookUrl() {
+            var copyText = document.getElementById("webhook_url");
+            copyText.removeAttribute("disabled"); 
+            copyText.select();
+            copyText.setSelectionRange(0, 99999); 
+            document.execCommand("copy");
+            copyText.setAttribute("disabled", "disabled"); 
+            
+            mdui.snackbar({
+              message: "Webhook 注册链接已复制到剪贴板！",
+              timeout: 2000
+            });
+        }
+    </script>';
+    
+    echo '<script src="https://unpkg.com/mdui@1.0.2/dist/js/mdui.min.js"></script>';
+    echo '</body></html>';
     exit;
 }
 ?>
@@ -205,68 +202,247 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <link rel="stylesheet" href="https://unpkg.com/mdui@1.0.2/dist/css/mdui.min.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        .status-card {
+            border-radius: 8px; 
+            background-color: #fff; 
+            border-left: 5px solid; 
+            transition: border-color 0.3s ease;
+        }
+
+        .border-green {
+            border-color: #4caf50 !important; 
+        }
+        .border-red {
+            border-color: #f44336 !important; 
+        }
+        .border-orange {
+            border-color: #ff9800 !important; 
+        }
+        
+        .status-col {
+            margin-bottom: 16px; 
+        }
+        .status-card .mdui-list-item {
+            padding: 8px 16px; 
+        }
+        .status-card .mdui-list-item-content {
+             padding: 0;
+        }
+
+        @media (min-width: 960px) { 
+            .main-content {
+                padding-right: 8px; 
+            }
+            .sidebar {
+                padding-left: 8px; 
+            }
+        }
+
+        @media (max-width: 959px) { 
+            .main-content, .sidebar {
+                padding-left: 0 !important;
+                padding-right: 0 !important;
+            }
+        }
+
+    </style>
 </head>
 <body class="mdui-theme-primary-indigo mdui-theme-accent-pink">
 
     <header class="mdui-appbar mdui-color-theme">
         <div class="mdui-toolbar">
             <a href="javascript:;" class="mdui-typo-title">sxBot 配置工具</a>
+            <div class="mdui-toolbar-spacer"></div>
+            <a href="javascript:;" class="mdui-btn mdui-btn-icon" onclick="showCopyright()">
+                <i class="mdui-icon material-icons">info_outline</i>
+            </a>
         </div>
     </header>
 
-    <div class="mdui-container mdui-p-t-3">
-        <div class="mdui-card mdui-shadow-2 mdui-p-a-3">
-            <div class="mdui-typo-headline mdui-m-b-2">配置信息填写</div>
-            <form method="post">
+    <div class="mdui-container mdui-p-t-3 mdui-p-b-3">
+        <?php
+        $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
+
+        if ($isSecure) {
+            $borderColorClass = 'border-green';
+            $iconColorClass = 'mdui-text-color-green';
+            $icon = 'lock'; 
+            $mainStatusText = 'HTTPS 已启用';
+            $messageDetail = '安全连接已建立。';
+        } else {
+            $borderColorClass = 'border-red';
+            $iconColorClass = 'mdui-text-color-red';
+            $icon = 'lock_open'; 
+            $mainStatusText = 'HTTPS 未启用';
+            $messageDetail = '请使用 HTTPS 访问。';
+        }
+        
+        $phpVersion = PHP_VERSION;
+        $isRecommendedPhp = version_compare($phpVersion, '7.2.0', '>=') && version_compare($phpVersion, '8.0.0', '<'); 
+
+        if ($isRecommendedPhp) {
+            $phpBorderClass = 'border-green';
+            $phpIconColorClass = 'mdui-text-color-green';
+            $phpIcon = 'check_circle'; 
+            $phpStatusText = 'PHP 版本推荐';
+            $phpMessageDetail = '当前版本 ' . $phpVersion . ' (7.2 - 8.0)。';
+        } else {
+            $phpBorderClass = 'border-orange';
+            $phpIconColorClass = 'mdui-text-color-orange';
+            $phpIcon = 'warning'; 
+            $phpStatusText = 'PHP 版本警告';
+            $phpMessageDetail = '当前版本 ' . $phpVersion . ' (不推荐的PHP很可能造成故障)(推荐版本7.2 - 8.0)。';
+        }
+        
+        $disableForm = !$isSecure;
+
+        $protocol = $isSecure ? 'https://' : 'http://';
+        $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'];
+        
+        $scriptPath = $_SERVER['SCRIPT_NAME'] ?? '/';
+        $baseDir = dirname($scriptPath); 
+        
+        $pathComponent = ($baseDir === '/' || $baseDir === '.') ? '' : $baseDir;
+
+        $suggestedMainDomain = $protocol . $host . $pathComponent;
+        ?>
+        
+        <div class="mdui-row mdui-row-gap-0">
+            
+            <div class="mdui-col-xs-12 mdui-col-md-8 main-content">
                 
-                <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
-                    <label class="mdui-textfield-label" for="secret_token">密钥（可选，留空自动生成，用于 Webhook 校验）</label>
-                    <input class="mdui-textfield-input" type="text" id="secret_token" name="secret_token">
+                <div class="mdui-row mdui-row-gap-0">
+                    <div class="mdui-col-xs-12 mdui-col-sm-6 status-col mdui-p-r-1">
+                        <div class="mdui-card mdui-shadow-2 status-card <?php echo $borderColorClass; ?>">
+                            <div class="mdui-list-item">
+                                <i class="mdui-list-item-icon mdui-icon material-icons <?php echo $iconColorClass; ?> mdui-m-r-3"><?php echo $icon; ?></i>
+                                
+                                <div class="mdui-list-item-content">
+                                    <div class="mdui-text-color-theme-secondary mdui-typo-caption mdui-m-b-0">
+                                        SSL 连接状态
+                                    </div>
+                                    <div class="mdui-typo-subheading mdui-text-color-black mdui-m-t-0 mdui-m-b-0">
+                                        <?php echo $mainStatusText; ?>
+                                    </div>
+                                    <div class="mdui-typo-caption mdui-text-color-theme-secondary">
+                                        <?php echo $messageDetail; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mdui-col-xs-12 mdui-col-sm-6 status-col mdui-p-l-1">
+                        <div class="mdui-card mdui-shadow-2 status-card <?php echo $phpBorderClass; ?>">
+                            <div class="mdui-list-item">
+                                <i class="mdui-list-item-icon mdui-icon material-icons <?php echo $phpIconColorClass; ?> mdui-m-r-3"><?php echo $phpIcon; ?></i>
+                                
+                                <div class="mdui-list-item-content">
+                                    <div class="mdui-text-color-theme-secondary mdui-typo-caption mdui-m-b-0">
+                                        PHP 运行环境
+                                    </div>
+                                    <div class="mdui-typo-subheading mdui-text-color-black mdui-m-t-0 mdui-m-b-0">
+                                        <?php echo $phpStatusText; ?>
+                                    </div>
+                                    <div class="mdui-typo-caption mdui-text-color-theme-secondary">
+                                        <?php echo $phpMessageDetail; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
-                    <label class="mdui-textfield-label" for="bot_token">你的 TOKEN（必填，主 Bot Token）</label>
-                    <input class="mdui-textfield-input" type="text" id="bot_token" name="bot_token" required>
-                </div>
+                <div class="mdui-card mdui-shadow-2 mdui-p-a-3 mdui-m-t-2" style="<?php echo $disableForm ? 'opacity: 0.5; pointer-events: none;' : ''; ?>">
+                    <div class="mdui-typo-headline mdui-m-b-2">配置信息填写</div>
+                    <form method="post" id="configForm">
+                        
+                        <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
+                            <label class="mdui-textfield-label" for="secret_token">密钥（可选，留空自动生成）</label>
+                            <input class="mdui-textfield-input" type="text" id="secret_token" name="secret_token" <?php echo $disableForm ? 'disabled' : ''; ?>>
+                        </div>
 
-                <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
-                    <label class="mdui-textfield-label" for="main_domain">你的根域名（必填）</label>
-                    <input class="mdui-textfield-input" type="text" id="main_domain" name="main_domain" required>
-                </div>
+                        <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
+                            <label class="mdui-textfield-label" for="bot_token">你的 TOKEN（必填，主 Bot Token）</label>
+                            <input class="mdui-textfield-input" type="text" id="bot_token" name="bot_token" required <?php echo $disableForm ? 'disabled' : ''; ?>>
+                        </div>
 
-                <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
-                    <label class="mdui-textfield-label" for="bot_username">你的主 Bot 用户名（必填，不带@，用于升级高级版链接）</label>
-                    <input class="mdui-textfield-input" type="text" id="bot_username" name="bot_username" required>
-                </div>
+                        <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
+                            <label class="mdui-textfield-label" for="main_domain">你的根域名（必填）</label>
+                            <input class="mdui-textfield-input" type="text" id="main_domain" name="main_domain" value="<?php echo htmlspecialchars($suggestedMainDomain); ?>" required <?php echo $disableForm ? 'disabled' : ''; ?>>
+                        </div>
 
-                <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
-                    <label class="mdui-textfield-label" for="db_user">数据库用户（必填）</label>
-                    <input class="mdui-textfield-input" type="text" id="db_user" name="db_user" required>
-                </div>
+                        <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
+                            <label class="mdui-textfield-label" for="bot_username">你的主 Bot 用户名（必填，不带@，用于升级高级版链接）</label>
+                            <input class="mdui-textfield-input" type="text" id="bot_username" name="bot_username" required <?php echo $disableForm ? 'disabled' : ''; ?>>
+                        </div>
 
-                <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
-                    <label class="mdui-textfield-label" for="db_pass">数据库密码</label>
-                    <input class="mdui-textfield-input" type="password" id="db_pass" name="db_pass">
-                </div>
+                        <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
+                            <label class="mdui-textfield-label" for="db_user">数据库用户（必填）</label>
+                            <input class="mdui-textfield-input" type="text" id="db_user" name="db_user" required <?php echo $disableForm ? 'disabled' : ''; ?>>
+                        </div>
 
-                <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
-                    <label class="mdui-textfield-label" for="db_name">数据库名（必填）</label>
-                    <input class="mdui-textfield-input" type="text" id="db_name" name="db_name" required>
-                </div>
+                        <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
+                            <label class="mdui-textfield-label" for="db_pass">数据库密码</label>
+                            <input class="mdui-textfield-input" type="password" id="db_pass" name="db_pass" <?php echo $disableForm ? 'disabled' : ''; ?>>
+                        </div>
 
-                <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
-                    <label class="mdui-textfield-label" for="config_dir">你的目录（必填）</label>
-                    <input class="mdui-textfield-input" type="text" id="config_dir" name="config_dir" required>
+                        <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
+                            <label class="mdui-textfield-label" for="db_name">数据库名（必填）</label>
+                            <input class="mdui-textfield-input" type="text" id="db_name" name="db_name" required <?php echo $disableForm ? 'disabled' : ''; ?>>
+                        </div>
+
+                        <div class="mdui-textfield mdui-textfield-floating-label mdui-m-y-2">
+                            <label class="mdui-textfield-label" for="config_dir">验证目录（必填）</label>
+                            <input class="mdui-textfield-input" type="text" id="config_dir" name="config_dir" required <?php echo $disableForm ? 'disabled' : ''; ?>>
+                        </div>
+                        
+                        <div class="mdui-m-t-4 mdui-m-b-2">
+                            <button type="submit" class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent" id="submitButton" <?php echo $disableForm ? 'disabled' : ''; ?>>开始配置</button>
+                        </div>
+                    </form>
                 </div>
-                
-                <div class="mdui-m-t-4 mdui-m-b-2">
-                    <button type="submit" class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-theme-accent">开始配置</button>
+            </div>
+            
+            <div class="mdui-col-xs-12 mdui-col-md-4 sidebar mdui-hidden-sm-down">
+                 <div class="mdui-card mdui-shadow-2 mdui-p-a-3"> 
+                    <div class="mdui-typo-title mdui-m-b-3">GitHub</div>
+                    
+                    <div class="mdui-card mdui-shadow-0 mdui-p-a-3 border-orange status-card" style="margin-bottom: 16px;">
+                        <div class="mdui-typo-subheading mdui-text-color-orange mdui-m-b-1">
+                            <i class="mdui-icon material-icons">open_in_new</i> 打开链接
+                        </div>
+                        <p class="mdui-typo-body-1 mdui-text-color-theme-secondary mdui-m-t-1 mdui-m-b-1">
+                            为了防止别有用心的人利用此项目进行圈钱，特此添加此条信息。
+                        </p>
+                        <p class="mdui-typo-body-1 mdui-text-color-theme-secondary mdui-m-b-0">
+                            二次开发者可以删除此消息。
+                        </p>
+                    </div>
+
+                    <div class="mdui-m-t-3 mdui-text-center">
+                        <a href="https://github.com/kugua332334554/sxbot" target="_blank" class="mdui-btn mdui-btn-raised mdui-ripple mdui-color-indigo mdui-btn-block">
+                            Github Link
+                        </a>
+                    </div>
                 </div>
-            </form>
+            </div>
+            
         </div>
-         
-
-    
     <script src="https://unpkg.com/mdui@1.0.2/dist/js/mdui.min.js"></script>
+    <script>
+        function showCopyright() {
+            mdui.dialog({
+                title: 'about',
+                content: '本软体由 Sakura 开发，并且公开于GitHub仓库，不收取任何费用。<br><br> Github:https://github.com/kugua332334554/sxbot <br><br> 其他项目 postbot:https://github.com/kugua332334554/postbot<br><br>版权所有 &copy; Sakura。',
+                buttons: [
+                    {
+                        text: 'close'
+                    }
+                ]
+            });
+        }
+    </script>
 </body>
 </html>
