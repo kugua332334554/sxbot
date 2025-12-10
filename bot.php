@@ -710,6 +710,12 @@ function sendAdminBotManagementMenu($chat_id, $message_id = null, $page = 1, $se
         ['text' => '🔍 按OwnerID搜索', 'callback_data' => 'admin_search_bot:owner_id'],
         ['text' => '🔍 按Bot名搜索', 'callback_data' => 'admin_search_bot:bot_username']
     ];
+    //new key[recover and update webhook 和code]
+    if (!$search_term) {
+        $keyboard[] = [
+            ['text' => '🔄 强刷所有Bot内核 ', 'callback_data' => 'admin_force_update_all_bots']
+        ];
+    }
     if ($search_term) {
          $keyboard[] = [['text' => '🔄 清除搜索结果', 'callback_data' => 'admin_bot_management']];
     }
@@ -1253,31 +1259,51 @@ function sendAdminPanel($chat_id) {
 }
 
 /**
+ * update ads.txt
+ */
+function updateAdsFile($content) {
+    $file_path = __DIR__ . '/ads.txt';
+    
+    if (file_put_contents($file_path, $content) !== false) {
+        error_log("ads.txt updated successfully.");
+        return true;
+    } else {
+        error_log("Failed to update ads.txt: " . $file_path);
+        return false;
+    }
+}
+
+/**
  * 发送管理员配置项管理子菜单。
  */
 function sendAdminConfigSubMenu($chat_id, $message_id) {
     $KEFUURL = getConfigLink('KEFUURL');
     $JIAOCHENGPINDAO = getConfigLink('JIAOCHENGPINDAO');
-    $ADS = getConfigLink('ADS');
-       $OKPAYTOKEN = getConfigLink('OKPAYTOKEN');
+    $ADS = getConfigLink('ADS'); // 保留这行
+    $OKPAYTOKEN = getConfigLink('OKPAYTOKEN');
     $OKPAYID = getConfigLink('OKPAYID');
     $COST = getConfigLink('COST');
     $COIN = getConfigLink('COIN');
-    $config_message = "当前配置值：\n\n";
+    
+    // 读取广告文件内容
+    $ads_file_path = __DIR__ . '/ads.txt';
+    $ads_content = file_exists($ads_file_path) ? file_get_contents($ads_file_path) : '暂无内容';
+    
+    $config_message = "当前配置值:\n\n";
     $config_message .= "客服链接: `{$KEFUURL}`\n";
     $config_message .= "教程频道: `{$JIAOCHENGPINDAO}`\n";
-    $config_message .= "广告链接: `{$ADS}`\n";
-     $config_message .= "OKPAY Token: `{$OKPAYTOKEN}`\n";
+    $config_message .= "广告文件内容: `{$ads_content}`\n"; 
+    $config_message .= "OKPAY Token: `{$OKPAYTOKEN}`\n";
     $config_message .= "OKPAY ID: `{$OKPAYID}`\n";
     $config_message .= "基础费用: `{$COST}`\n";
     $config_message .= "结算币种: `{$COIN}`\n\n";
-    $config_message .= "请选择要修改的配置项：";
+    $config_message .= "请选择要修改的配置项:";
     
     $config_keyboard = [
         [['text' => '修改 客服链接', 'callback_data' => 'admin_set_kefu']],
         [['text' => '修改 教程频道', 'callback_data' => 'admin_set_jiaocheng']],
-      //  [['text' => '修改 广告链接', 'callback_data' => 'admin_set_ads']],
-               [['text' => '修改 OKPAY TOKEN', 'callback_data' => 'admin_set_okpaytoken']],
+        [['text' => '修改 广告文件内容', 'callback_data' => 'admin_set_ads_content']], 
+        [['text' => '修改 OKPAY TOKEN', 'callback_data' => 'admin_set_okpaytoken']],
         [['text' => '修改 OKPAY ID', 'callback_data' => 'admin_set_okpayid']],
         [['text' => '修改 基础费用', 'callback_data' => 'admin_set_cost']],
         [['text' => '修改 结算币种', 'callback_data' => 'admin_set_coin']],
@@ -1295,7 +1321,6 @@ function sendAdminConfigSubMenu($chat_id, $message_id) {
         'parse_mode' => 'Markdown'
     ];
 
-    // 编辑消息
     if ($message_id) {
         $params['message_id'] = $message_id;
         sendTelegramApi('editMessageText', $params);
@@ -1789,27 +1814,46 @@ return;
 
         // --- 配置编辑流程 ---
         if (strpos($current_state, 'waiting_for_') === 0 && !in_array($current_state, ['waiting_for_admin_id_to_add', 'waiting_for_admin_id_to_remove'])) {
-            $config_key = strtoupper(str_replace('waiting_for_', '', $current_state));
+    
+    // 特殊处理广告文件内容
+       if ($current_state === 'waiting_for_ads_content') {
+        if (updateAdsFile($text)) {
+            $response_text = "✅ 广告文件内容已成功更新。";
+            setUserState($user_id, 'none');
             
-            // 尝试更新配置文件
-            if (updateConfigFile($config_key, $text)) {
-                $response_text = "✅ 配置项 `{$config_key}` 已成功更新为: `{$text}`。";
-                // 重置状态
-                setUserState($user_id, 'none');
-                
-                sendTelegramApi('sendMessage', [
-                    'chat_id' => $chat_id,
-                    'text' => $response_text,
-                    'parse_mode' => 'Markdown'
-                ]);
-                sendAdminConfigSubMenu($chat_id, null);
-
-            } else {
-                $response_text = "❌ 配置文件更新失败。请检查文件权限或配置项是否存在。";
-                sendTelegramApi('sendMessage', ['chat_id' => $chat_id, 'text' => $response_text]);
-            }
-            return; 
+            sendTelegramApi('sendMessage', [
+                'chat_id' => $chat_id,
+                'text' => $response_text,
+                'parse_mode' => 'Markdown'
+            ]);
+            sendAdminConfigSubMenu($chat_id, null);
+        } else {
+            $response_text = "❌ 广告文件更新失败。请检查文件权限。";
+            sendTelegramApi('sendMessage', ['chat_id' => $chat_id, 'text' => $response_text]);
         }
+        return;
+    }
+    
+    // 原有的 config.txt 更新逻辑
+    $config_key = strtoupper(str_replace('waiting_for_', '', $current_state));
+    
+    if (updateConfigFile($config_key, $text)) {
+        $response_text = "✅ 配置项 `{$config_key}` 已成功更新为: `{$text}`。";
+        setUserState($user_id, 'none');
+        
+        sendTelegramApi('sendMessage', [
+            'chat_id' => $chat_id,
+            'text' => $response_text,
+            'parse_mode' => 'Markdown'
+        ]);
+        sendAdminConfigSubMenu($chat_id, null);
+
+    } else {
+        $response_text = "❌ 配置文件更新失败。请检查文件权限或配置项是否存在。";
+        sendTelegramApi('sendMessage', ['chat_id' => $chat_id, 'text' => $response_text]);
+    }
+    return; 
+}
     }
     }
     if ($lower_text === '/start') {
@@ -1955,12 +1999,81 @@ return;
     $bot_username = substr($data, strlen('bot_settings:'));
     sendBotSettingsMenu($chat_id, $user_id, $bot_username, $message_id);
 } elseif (strpos($data, 'bot_action:') === 0) {
-        list(, $action, $bot_username) = explode(':', $data);
-        
-        switch ($action) {
-            case 'sync':
-                sendTelegramApi('answerCallbackQuery', ['callback_query_id' => $callback_query['id'], 'text' => "✅ 机器人 @{$bot_username} 已重启和清除缓存"]);
+    list(, $action, $bot_username) = explode(':', $data);
+    
+    switch ($action) {
+        case 'sync':
+            // 获取 Bot 信息
+            $bot_info = getBotInfoByUsername($bot_username);
+            if (!$bot_info) {
+                sendTelegramApi('answerCallbackQuery', ['callback_query_id' => $callback_query['id'], 'text' => "❌ 找不到机器人", 'show_alert' => true]);
                 break;
+            }
+            
+            $bot_token = $bot_info['bot_token'];
+            $bot_php_file = USER_DATA_BASE_DIR . $bot_username . '/bot.php';
+            
+            // Secret
+            $conn = connectDB();
+            $stmt = $conn->prepare("SELECT secret_token FROM `token` WHERE bot_username = ?");
+            $stmt->bind_param("s", $bot_username);
+            $stmt->execute();
+            $t_res = $stmt->get_result()->fetch_assoc();
+            $stmt->close();
+            
+            // 统一使用变量
+            $secret_token = $t_res['secret_token'] ?? bin2hex(random_bytes(32));
+
+            // 文件内容替换
+            if (file_exists(COPY_SOURCE_DIR . 'bot.php')) {
+                $content = file_get_contents(COPY_SOURCE_DIR . 'bot.php');
+                $placeholders = ['__SUB_BOT_ADMIN_ID__', '__SUB_BOT_USER_TABLE__', 'YOUR_SUB_BOT_TOKEN_HERE', '__YOUR_SECRET_TOKEN__'];
+                $replacements = [$user_id, $bot_username, $bot_token, $secret_token];
+                
+                $new_content = str_replace($placeholders, $replacements, $content);
+                
+                // 确保目录存在并写入
+                if (!is_dir(dirname($bot_php_file))) mkdir(dirname($bot_php_file), 0755, true);
+                file_put_contents($bot_php_file, $new_content);
+            }
+
+            // 4. cURL
+            $webhook_url = MAIN_BOT_DOMAIN . '/userdata/' . $bot_username . '/bot.php';
+            $api_url = "https://api.telegram.org/bot{$bot_token}/setWebhook";
+            
+            $post_fields = [
+                'url' => $webhook_url,
+                'secret_token' => $secret_token,
+                'drop_pending_updates' => true
+            ];
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $api_url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $post_fields); 
+            $response = curl_exec($ch);
+            $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            $result = json_decode($response, true);
+
+            // cURL
+            if ($http_code == 200 && isset($result['ok']) && $result['ok'] === true) {
+                sendTelegramApi('answerCallbackQuery', [
+                    'callback_query_id' => $callback_query['id'],
+                    'text' => "✅ 同步成功！Webhook 已加密连接。"
+                ]);
+            } else {
+                $error_info = $result['description'] ?? "HTTP代码: $http_code";
+                sendTelegramApi('answerCallbackQuery', [
+                    'callback_query_id' => $callback_query['id'],
+                    'text' => "⚠️ 文件已更新，但 Webhook 设置失败: $error_info",
+                    'show_alert' => true
+                ]);
+            }
+            $conn->close();
+            break;
             case 'delete':
                 $safe_bot_username = escapeMarkdownV2($bot_username);
                 $confirm_keyboard = [
@@ -2063,6 +2176,48 @@ return;
                 'parse_mode' => 'Markdown'
             ]);
         }
+        elseif ($data === 'admin_force_update_all_bots') {
+            // 发送确认弹窗
+            $confirm_keyboard = [
+                [['text' => '🚨 确认执行 (不可逆)', 'callback_data' => 'admin_do_mass_update']],
+                [['text' => '❌ 取消', 'callback_data' => 'admin_bot_management']]
+            ];
+            
+            sendTelegramApi('editMessageText', [
+                'chat_id' => $chat_id,
+                'message_id' => $message_id,
+                'text' => "⚠️ *高危操作确认*\n\n您即将对数据库中 *所有* 机器人执行以下操作：\n1.更新下级版本 2. 重新向 Telegram 注册 Webhook\n\n此操作可能需要几分钟，期间请勿重复点击。",
+                'reply_markup' => json_encode(['inline_keyboard' => $confirm_keyboard]),
+                'parse_mode' => 'Markdown'
+            ]);
+        }
+        elseif ($data === 'admin_do_mass_update') {
+            sendTelegramApi('answerCallbackQuery', [
+                'callback_query_id' => $callback_query['id'],
+                'text' => '🚀 任务已发送到后台处理，完成后会通知您。',
+                'show_alert' => true
+            ]);
+            
+            // 发admin面板
+            sendAdminBotManagementMenu($chat_id, $message_id);
+
+            // 构造
+            $update_script_url = MAIN_BOT_DOMAIN . '/mass_update.php';
+            
+            // 异步触发 PHP 脚本
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $update_script_url);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, ['admin_id' => $chat_id]); // 传递管理员ID用于回传结果
+            
+            curl_setopt($ch, CURLOPT_TIMEOUT_MS, 500); // 500毫秒超时
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
+            
+            curl_exec($ch);
+            curl_close($ch);
+            
+        }
         elseif ($data === 'admin_remove_admin') {
             setUserState($user_id, 'waiting_for_admin_id_to_remove');
             sendTelegramApi('sendMessage', [
@@ -2114,27 +2269,34 @@ return;
         }
         
         elseif (strpos($data, 'admin_set_') === 0) {
-             $config_key_map = [
-                'admin_set_kefu' => 'KEFUURL',
-                'admin_set_jiaocheng' => 'JIAOCHENGPINDAO',
-                'admin_set_ads' => 'ADS',
-                'admin_set_okpaytoken' => 'OKPAYTOKEN',
-                'admin_set_okpayid' => 'OKPAYID',
-                'admin_set_cost' => 'COST',
-                'admin_set_coin' => 'COIN',
-            ];
-            $config_key = $config_key_map[$data] ?? null;
-            if ($config_key) {
-                $prompt_text = "请发送新的 *{$config_key}*。";
-                $waiting_state = 'waiting_for_' . strtolower($config_key);
-                setUserState($user_id, $waiting_state);
-                sendTelegramApi('sendMessage', [
-                    'chat_id' => $chat_id, 
-                    'text' => $prompt_text,
-                    'parse_mode' => 'Markdown'
-                ]);
-            }
-        }
+    $config_key_map = [
+        'admin_set_kefu' => 'KEFUURL',
+        'admin_set_jiaocheng' => 'JIAOCHENGPINDAO',
+        'admin_set_ads_content' => 'ADS_CONTENT', 
+        'admin_set_okpaytoken' => 'OKPAYTOKEN',
+        'admin_set_okpayid' => 'OKPAYID',
+        'admin_set_cost' => 'COST',
+        'admin_set_coin' => 'COIN',
+    ];
+    $config_key = $config_key_map[$data] ?? null;
+    if ($config_key) {
+        $prompt_text = "请发送新的 *{$config_key}*。";
+        $waiting_state = 'waiting_for_' . strtolower($config_key);
+        setUserState($user_id, $waiting_state);
+        
+        // 添加取消按钮
+        $cancel_keyboard = [
+            [['text' => '❌ 取消设置', 'callback_data' => 'admin_manage_configs']]
+        ];
+        
+        sendTelegramApi('sendMessage', [
+            'chat_id' => $chat_id, 
+            'text' => $prompt_text,
+            'reply_markup' => json_encode(['inline_keyboard' => $cancel_keyboard]),
+            'parse_mode' => 'Markdown'
+        ]);
+    }
+}
         elseif (strpos($data, 'admin_bot_page:') === 0) {
             list(, $page, $search_by, $search_term) = explode(':', $data, 4);
             $search_by = ($search_by === '') ? null : $search_by;
