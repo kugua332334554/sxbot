@@ -906,18 +906,21 @@ function getAdminMainMenu($conn) {
                 ['text' => '📷 启动媒体', 'callback_data' => 'menu_start_media']
             ],
             [
-                ['text' => '🔘 底部按钮', 'callback_data' => 'menu_keyboard'],
+                ['text' => '📘 底部按钮', 'callback_data' => 'menu_keyboard'],
                 ['text' => '🤖 关键词回复', 'callback_data' => 'menu_keywords_list']
             ],
             [
                  ['text' => '📊 数据统计', 'callback_data' => 'menu_stats'],
                  ['text' => '👥 用户管理', 'callback_data' => 'menu_user_management']
+            ],
+            [
+                ['text' => '📖 使用教程', 'callback_data' => 'menu_tutorial']  // 新增教程按钮
             ]
         ]
     ];
     
     if (getBotCostStatus($conn) === 'free') {
-        $markup['inline_keyboard'][] = [['text' => '🔐 去解锁高级功能', 'url' => 'https://t.me/你的主Bot用户名']];
+        $markup['inline_keyboard'][] = [['text' => '🔓 去解锁高级功能', 'url' => 'https://t.me/你的主Bot用户名']];
     }
     
     return ['text' => $text, 'markup' => $markup];
@@ -991,6 +994,120 @@ if ($user_role === 'admin' && isset($update['callback_query'])) {
         $menu = getAdminMainMenu($conn);
         editTelegramMessage($admin_id, $message_id, $menu['text'], null, $menu['markup']);
     }
+    
+        elseif ($callback_data === 'menu_tutorial') {
+        $tutorial_text = "📖 **机器人使用教程**\n\n";
+        $tutorial_text .= "═══════════════════\n";
+        $tutorial_text .= "**🎯 基础设置**\n\n";
+        
+        $tutorial_text .= "**1️⃣ 启动消息设置**\n";
+        $tutorial_text .= "• 点击「启动消息」→「修改消息文本」\n";
+        $tutorial_text .= "• 支持变量：\n";
+        $tutorial_text .= "  `{{username}}` - 显示用户名\n";
+        $tutorial_text .= "  `{{userid}}` - 显示用户ID\n";
+        $tutorial_text .= "  `{{nickname}}` - 显示昵称\n\n";
+        
+        $tutorial_text .= "**2️⃣ 启动媒体设置**\n";
+        $tutorial_text .= "• 点击「启动媒体」输入图片/视频URL\n";
+        $tutorial_text .= "• 访问 https://a9a25fe3.telegraph-image-cp8.pages.dev 上传图片获取链接\n";
+        $tutorial_text .= "• 发送 `none` 可清除媒体\n\n";
+        
+        $tutorial_text .= "**3️⃣ 内联按钮设置**\n";
+        $tutorial_text .= "• 点击「启动消息」→「修改内联按钮」\n";
+        $tutorial_text .= "• 格式：`[按钮名+链接] [另一按钮+链接]`\n";
+        $tutorial_text .= "• 示例：`[官网+https://example.com] [频道+https://t.me/channel]`\n";
+        $tutorial_text .= "• 每行一排按钮\n\n";
+        
+        $tutorial_text .= "**4️⃣ 底部按钮设置**\n";
+        $tutorial_text .= "• 点击「底部按钮」输入配置\n";
+        $tutorial_text .= "• 格式：`按钮1 | 按钮2 | 按钮3`\n";
+        $tutorial_text .= "• 示例：`帮助 | 关于 | 联系我们`\n";
+        $tutorial_text .= "• 每行一排，用 `|` 分隔\n";
+        $tutorial_text .= "• 发送 `none` 可清除键盘\n\n";
+        
+        $tutorial_text .= "═══════════════════\n";
+        $tutorial_text .= "**🤖 关键词回复**\n\n";
+        
+        $tutorial_text .= "**添加关键词：**\n";
+        $tutorial_text .= "• 点击「关键词回复」→「➕ 添加新关键词」\n";
+        $tutorial_text .= "• 输入关键词（如：`价格`）\n";
+        $tutorial_text .= "• 设置回复文本、媒体、按钮\n\n";
+        
+        $tutorial_text .= "**关键词支持变量：**\n";
+        $tutorial_text .= "• `$username` - 用户名（注意去掉空格）\n";
+        $tutorial_text .= "• `$userid` - 用户ID\n";
+        $tutorial_text .= "• `$nickname` - 昵称\n\n";
+        
+        $tutorial_text .= "**按钮格式：**\n";
+        $tutorial_text .= "• `按钮名-链接|另一按钮-链接`\n";
+        $tutorial_text .= "• 示例：`查看详情-https://example.com|联系客服-https://t.me/support`\n";
+        $tutorial_text .= "• 发送 `none` 清除按钮\n\n";
+        
+        $tutorial_text .= "**预览功能：**\n";
+        $tutorial_text .= "• 编辑关键词时点击「👀 预览回复」\n";
+        $tutorial_text .= "• 查看实际效果（包括变量替换）\n\n";
+        
+        $tutorial_text .= "═══════════════════\n";
+        $tutorial_text .= "**👥 用户管理**\n\n";
+        
+        $tutorial_text .= "**封禁用户：**\n";
+        $tutorial_text .= "• 方式1：点击用户通知下的「永久封禁该用户 🚫」按钮\n";
+        $tutorial_text .= "• 方式2：发送 `/ban 用户ID`\n";
+        $tutorial_text .= "• 被封禁用户的消息不会转发给管理员\n\n";
+        
+        $tutorial_text .= "**解除封禁：**\n";
+        $tutorial_text .= "• 发送 `/unban 用户ID`\n\n";
+        
+        $tutorial_text .= "**管理员设置：**\n";
+        $tutorial_text .= "• 点击「用户管理」→「👑 查看管理员」\n";
+        $tutorial_text .= "• 可添加/删除管理员\n";
+        $tutorial_text .= "• 被添加者必须先启动过机器人\n\n";
+        
+        $tutorial_text .= "═══════════════════\n";
+        $tutorial_text .= "**📢 广播功能**\n\n";
+        
+        $tutorial_text .= "**发送文字广播：**\n";
+        $tutorial_text .= "• 发送 `/gb 你的广播内容`\n";
+        $tutorial_text .= "• 示例：`/gb 系统维护通知：明天10点停机`\n\n";
+        
+        $tutorial_text .= "**发送图片广播：**\n";
+        $tutorial_text .= "• 上传图片，在标题中输入 `/gb 图片说明文字`\n";
+        $tutorial_text .= "• 完成后收到报告\n\n";
+        
+        $tutorial_text .= "═══════════════════\n";
+        $tutorial_text .= "**💬 客服对话**\n\n";
+        
+        $tutorial_text .= "• 用户发送的消息会自动转发给所有管理员\n";
+        $tutorial_text .= "• **回复用户消息**：直接回复转发的消息即可\n";
+        $tutorial_text .= "• 回复后会自动发送给对应用户\n";
+        $tutorial_text .= "• 支持回复文字、图片、视频等\n\n";
+        
+        $tutorial_text .= "═══════════════════\n";
+        $tutorial_text .= "**🎓 实用技巧**\n\n";
+        
+        $tutorial_text .= "• 清除设置：输入 `none` 可清空对应配置\n";
+        $tutorial_text .= "• 预览效果：先预览再保存，确保效果正确\n";
+        $tutorial_text .= "• 变量使用：启动消息用 `{{}}` ，关键词用 `$`\n";
+        $tutorial_text .= "• 数据统计：随时查看用户、管理员、封禁数量\n\n";
+        
+        $tutorial_text .= "═══════════════════\n";
+        $tutorial_text .= "**❓ 常见问题**\n\n";
+        
+        $tutorial_text .= "**Q：如何让关键词支持多个触发词？**\n";
+        $tutorial_text .= "A：系统会检测用户消息是否包含关键词，所以一个关键词可匹配多种说法\n\n";
+        
+        $tutorial_text .= "═══════════════════\n";
+        $tutorial_text .= "💡 需要帮助？请联系主Bot获取支持";
+        
+        $markup = [
+            'inline_keyboard' => [
+                [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]
+            ]
+        ];
+        
+        editTelegramMessage($admin_id, $message_id, $tutorial_text, 'Markdown', $markup);
+    }
+
 
     elseif ($callback_data === 'menu_start_message') {
         $text = "👋 **启动消息管理**\n\n请选择要修改的部分：";
@@ -998,11 +1115,28 @@ if ($user_role === 'admin' && isset($update['callback_query'])) {
             'inline_keyboard' => [
                 [['text' => '✍️ 修改消息文本', 'callback_data' => 'edit_start_text']],
                 [['text' => '🔗 修改内联按钮', 'callback_data' => 'edit_start_buttons']],
+                [['text' => '👀 预览启动消息', 'callback_data' => 'preview_start_message']],
                 [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]
             ]
         ];
         editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
     }
+
+    elseif ($callback_data === 'preview_start_message') {
+        // 获取配置
+        $start_message = str_replace("\\n", "\n", getConfigValue('STARTMESSAGE') ?? "【未设置启动消息】");
+        $start_img_url = getConfigValue('STARTIMG');
+        $inline_keyboard_markup = parseAnnniuFile();
+        
+        // 使用管理员的信息替换变量进行预览
+        $admin_info = ['id' => $admin_id, 'username' => $update['callback_query']['from']['username'] ?? 'Admin', 'first_name' => 'Admin', 'last_name' => 'Preview'];
+        $start_message = replaceUserVariables($start_message, $admin_info);
+        
+        // 发送预览
+        sendResponse($admin_id, $start_message, $start_img_url, $inline_keyboard_markup);
+        answerCallbackQuery($callback_query_id, "已发送预览消息");
+    }
+
     elseif ($callback_data === 'edit_start_text') {
         setUserState($conn, $admin_id, 'awaiting_start_text');
         $current_text = str_replace("\\n", "\n", getConfigValue('STARTMESSAGE') ?? '【空】');
@@ -1013,7 +1147,7 @@ if ($user_role === 'admin' && isset($update['callback_query'])) {
 elseif ($callback_data === 'edit_start_buttons') {
         setUserState($conn, $admin_id, 'awaiting_start_buttons');
         $current_buttons = file_exists(ANNIU) ? file_get_contents(ANNIU) : '【空】';
-        $text = "当前的内联按钮配置如下 (anniu.txt):\n格式: `[按钮名+链接] [另一按钮+链接]`\n\n`" . $current_buttons . "`\n\n现在请发送新的按钮配置。";
+        $text = "当前的内联按钮配置如下:\n格式: `[按钮名+链接] [另一按钮+链接]`\n\n`" . $current_buttons . "`\n\n现在请发送新的按钮配置。\n发送 none 清除按钮配置。";
         $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'menu_start_message']]]];
         editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
     }
@@ -1029,7 +1163,7 @@ elseif ($callback_data === 'edit_start_buttons') {
     elseif ($callback_data === 'menu_keyboard') {
         setUserState($conn, $admin_id, 'awaiting_keyboard');
         $current_keyboard = file_exists(JIANPAN) ? file_get_contents(JIANPAN) : '【空】';
-        $text = "🔘 **底部按钮管理**\n\n当前的底部按钮配置如下 (qidong.txt):\n格式: `按钮1 | 按钮2` (每行一排)\n\n`" . $current_keyboard . "`\n\n现在请发送新的底部按钮配置。";
+        $text = "🔘 **底部按钮管理**\n\n当前的底部按钮配置如下 (qidong.txt):\n格式: `按钮1 | 按钮2` (每行一排)\n\n`" . $current_keyboard . "`\n\n现在请发送新的底部按钮配置。\n\n发送 none 即可清除键盘。";
         $markup = ['inline_keyboard' => [[['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]]];
         editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
     }
@@ -1068,7 +1202,7 @@ elseif ($callback_data === 'edit_start_buttons') {
                     "媒体URL: `".escapeMarkdown($config['url'] ?? '【未设置】')."`\n" .
                     "按钮: `".escapeMarkdown(implode("\n", $config['buttons_raw'] ?? []) ?: '【未设置】')."`";
             
-            $markup = [
+                $markup = [
                 'inline_keyboard' => [
                     [
                         ['text' => '✍️ 文本', 'callback_data' => 'keyword_set_text_' . $encoded_kw],
@@ -1076,6 +1210,9 @@ elseif ($callback_data === 'edit_start_buttons') {
                     ],
                     [
                         ['text' => '🔗 按钮', 'callback_data' => 'keyword_set_buttons_' . $encoded_kw],
+                        ['text' => '👀 预览回复', 'callback_data' => 'keyword_preview_' . $encoded_kw] // 新增的按钮
+                    ],
+                    [
                         ['text' => '🗑️ 删除', 'callback_data' => 'keyword_delete_' . $encoded_kw]
                     ],
                     [['text' => '🔙 返回列表', 'callback_data' => 'menu_keywords_list']]
@@ -1084,6 +1221,59 @@ elseif ($callback_data === 'edit_start_buttons') {
             editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
         }
     }
+
+    elseif (strpos($callback_data, 'keyword_preview_') === 0) {
+        $encoded_kw = substr($callback_data, strlen('keyword_preview_'));
+        $keyword_word = base64_decode($encoded_kw);
+        
+        $keywords = parseGuanjianciFile(true);
+        $config = null;
+        foreach($keywords as $kw) {
+            if ($kw['word'] === $keyword_word) {
+                $config = $kw;
+                break;
+            }
+        }
+
+        if ($config) {
+            // 构造回复内容
+            $reply_text = $config['text'] ?? '';
+            $reply_url = $config['url'] ?? '';
+            $reply_markup = [];
+            
+            // 处理按钮结构
+            if (!empty($config['buttons_raw'])) {
+                 $inline_keyboard = [];
+                 foreach($config['buttons_raw'] as $line) {
+                    $buttons_text = explode('|', $line);
+                    $row = [];
+                    foreach ($buttons_text as $button_pair) {
+                        if (strpos($button_pair, '-') !== false) {
+                            list($btn_text, $btn_url) = explode('-', $button_pair, 2);
+                            $trimmed_text = trim($btn_text);
+                            $trimmed_url = trim($btn_url);
+                            if (!empty($trimmed_text) && filter_var($trimmed_url, FILTER_VALIDATE_URL)) {
+                                $row[] = ['text' => $trimmed_text, 'url' => $trimmed_url];
+                            }
+                        }
+                    }
+                    if (!empty($row)) $inline_keyboard[] = $row;
+                 }
+                 if (!empty($inline_keyboard)) $reply_markup = ['inline_keyboard' => $inline_keyboard];
+            }
+
+            // 替换变量
+            $admin_info = ['id' => $admin_id, 'username' => $update['callback_query']['from']['username'] ?? 'Admin', 'first_name' => 'Admin', 'last_name' => 'Preview'];
+            $reply_text = replaceKeywordVariables($reply_text, $admin_info);
+
+            // 发送预览
+            sendResponse($admin_id, $reply_text, $reply_url, $reply_markup);
+            answerCallbackQuery($callback_query_id, "已发送预览回复");
+        } else {
+            answerCallbackQuery($callback_query_id, "找不到该关键词配置", true);
+        }
+    }
+
     elseif (strpos($callback_data, 'keyword_set_text_') === 0) {
         $encoded_kw = substr($callback_data, strlen('keyword_set_text_'));
         setUserState($conn, $admin_id, 'awaiting_keyword_text_' . $encoded_kw);
@@ -1274,9 +1464,9 @@ if ($user_id) {
         if (in_array($current_state, ['awaiting_start_text', 'awaiting_start_buttons', 'awaiting_start_media', 'awaiting_keyboard'])) {
             $success = false;
             if ($current_state === 'awaiting_start_text') $success = updateStartMessageInConfig($text);
-            elseif ($current_state === 'awaiting_start_buttons') $success = writeAnnniuFileContent($text);
+            elseif ($current_state === 'awaiting_start_buttons') $success = writeAnnniuFileContent((strtolower(trim($text)) === 'none') ? '' : $text);
             elseif ($current_state === 'awaiting_start_media') $success = updateStartImageInConfig((strtolower(trim($text)) === 'none') ? '' : trim($text));
-            elseif ($current_state === 'awaiting_keyboard') $success = writeJianpanFileContent($text);
+            elseif ($current_state === 'awaiting_keyboard') $success = writeJianpanFileContent((strtolower(trim($text)) === 'none') ? '' : $text);
             
             sendTelegramMessage($chat_id, $success ? "✅ 更新成功！" : "❌ 操作失败！");
             setUserState($conn, $user_id, 'none');
