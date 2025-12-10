@@ -1,6 +1,7 @@
 <?php
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // 确保使用 HTTPS
     $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
     
     if (!$isSecure) {
@@ -18,6 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'bot_username' => trim($_POST['bot_username'] ?? '') 
     ];
 
+    // 必填项检查
     $required = ['bot_token', 'main_domain', 'db_user', 'db_name', 'config_dir', 'bot_username']; 
     foreach ($required as $field) {
         if (empty($config[$field])) {
@@ -25,11 +27,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    // 密钥自动生成
     if (empty($config['secret_token'])) {
+        // 使用 16 字节的安全随机数生成 32 字符的十六进制密钥
         $config['secret_token'] = bin2hex(random_bytes(16));
     }
     
     $configDir = $config['config_dir'];
+    
+    // 检查并创建配置目录
     if (!is_dir($configDir)) {
         if (!mkdir($configDir, 0777, true)) {
             die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法创建配置目录 "' . htmlspecialchars($configDir) . '"，请检查服务器文件权限</h2></div>');
@@ -45,6 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    // 处理 bot.php 文件配置替换
     $botFile = 'bot.php';
     if (!file_exists($botFile)) {
         die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：未找到bot.php文件，请确保该文件与配置工具在同一目录</h2></div>');
@@ -90,13 +97,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 "define('REMOTE_ADS_CONFIG_URL', '你的域名/ads.txt');" => "define('REMOTE_ADS_CONFIG_URL', '{$mainDomainClean}/ads.txt');",
                 "define('BROADCAST_SCRIPT_URL', 'https://你的域名/broadcast.php');" => "define('BROADCAST_SCRIPT_URL', '{$mainDomainClean}/broadcast.php');",
-                "\$markup['inline_keyboard'][] = [['text' => '🔐 去解锁高级功能', 'url' => 'https://t.me/你的主Bot用户名']];" => "\$markup['inline_keyboard'][] = [['text' => '🔐 去解锁高级功能', 'url' => 'https://t.me/{$config['bot_username']}']];",
+                "https://t.me/你的主Bot用户名']];" => "https://t.me/{$config['bot_username']}']];",
             ];
             
             $newCopyContent = str_replace(array_keys($copyReplacements), array_values($copyReplacements), $copyContent, $count);
             
             if (file_put_contents($copyBotFile, $newCopyContent) === false) {
-                die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法写入 copy/bot.php 文件，请检查文件权限。</h2></div>');
+                die('<div class="mdui-typo mdui-container mdui-+p-a-3"><h2 class="mdui-text-color-red">错误：无法写入 copy/bot.php 文件，请检查文件权限。</h2></div>');
             } else {
                 $copyBotSuccess = true;
             }
@@ -105,6 +112,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $copyBotSuccess = true;
     }
     
+
+    $massUpdateFile = 'mass_update.php';
+    $targetMassUpdateFile = $configDir . '/' . basename($massUpdateFile); 
+
+    if (file_exists($massUpdateFile)) {
+        $massContent = file_get_contents($massUpdateFile);
+        if ($massContent === false) {
+            die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法读取 mass_update.php 文件</h2></div>');
+        }
+
+        $massReplacements = [
+            "define('DB_USER', '数据库名');" => "define('DB_USER', '{$config['db_user']}');",
+            "define('DB_PASS', '数据库密码');" => "define('DB_PASS', '{$config['db_pass']}');",
+            "define('DB_NAME', '数据库名');" => "define('DB_NAME', '{$config['db_name']}');",
+            "define('BOT_TOKEN', '你的TOKEN');" => "define('BOT_TOKEN', '{$config['bot_token']}');",
+            "define('MAIN_BOT_DOMAIN', '你的根域名');" => "define('MAIN_BOT_DOMAIN', '{$config['main_domain']}');",
+        ];
+
+        $newMassContent = str_replace(array_keys($massReplacements), array_values($massReplacements), $massContent);
+
+        if (file_put_contents($massUpdateFile, $newMassContent) === false) {
+            die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法写入 mass_update.php 文件（配置替换失败），请检查文件权限</h2></div>');
+        }
+
+   //     if (!rename($massUpdateFile, $targetMassUpdateFile)) {
+   //         die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：mass_update.php 已配置，但无法移动到 "' . htmlspecialchars($configDir) . '"。请检查文件权限或手动移动！</h2></div>');
+   //     }
+    }
+
+    
+    // 数据库导入逻辑
     $sqlFile = 'db.sql';
     $dbImportSuccess = false;
     $dbImportMessage = '';
@@ -142,6 +180,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $dbImportSuccess = true; 
     }
     
+    // Webhook 注册和成功页面输出
     $webhookEndpoint = rtrim($config['main_domain'], '/') . '/bot.php';
     $encodedWebhookEndpoint = rawurlencode($webhookEndpoint);
 
