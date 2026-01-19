@@ -96,7 +96,7 @@ foreach ($user_ids as $target_user_id) {
     }
     
     // 避免触发洪水
-    usleep(100000); 
+    usleep(50000); 
 }
 
 // 发送报告
