@@ -1,4 +1,6 @@
 <?php
+ignore_user_abort(true); // 提交给后台
+set_time_limit(0);      // stl0
 // 日志
 function logBroadcastError($message) {
     $log_file = __DIR__ . '/broadcast.log';
