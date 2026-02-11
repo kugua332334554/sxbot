@@ -11,6 +11,8 @@ function logBroadcastError($message) {
 
 // 单次请求函数
 function sendTelegramRequest($bot_token, $method, $params) {
+    $params['parse_mode'] = 'HTML';
+    
     $url = 'https://api.telegram.org/bot' . $bot_token . '/' . $method;
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
@@ -56,13 +58,13 @@ if (!is_array($user_ids) || empty($user_ids)) {
 // 向管理员发送开始通知
 sendTelegramRequest($bot_token, 'sendMessage', [
     'chat_id' => $admin_chat_id,
-    'text' => "⏳ 广播任务已启动...\n目标用户: " . count($user_ids) . " 人。\n后台运行中，完成后将向您发送报告。"
+    'text' => "<tg-emoji emoji-id="5900104897885376843">⏳</tg-emoji> <b>广播任务已启动...</b>\n<tg-emoji emoji-id="5942877472163892475">👥</tg-emoji>目标用户: <code>" . count($user_ids) . "</code> 人。\n<tg-emoji emoji-id="5935795874251674052">⚡️</tg-emoji>后台运行中，完成后将向您发送报告。"
 ]);
 
 $total_users = count($user_ids);
 $success_count = 0;
 $fail_count = 0;
-$batch_size = 30; // more send time out
+$batch_size = 30; 
 $chunks = array_chunk($user_ids, $batch_size);
 
 foreach ($chunks as $chunk) {
@@ -73,7 +75,12 @@ foreach ($chunks as $chunk) {
     foreach ($chunk as $target_user_id) {
         $ch = curl_init();
         $url = 'https://api.telegram.org/bot' . $bot_token . '/';
-        $params = ['chat_id' => $target_user_id];
+        
+        // 初始化参数并设置 HTML 模式
+        $params = [
+            'chat_id' => $target_user_id,
+            'parse_mode' => 'HTML'
+        ];
 
         if (!empty($photo_file_id)) {
             $url .= 'sendPhoto';
@@ -119,7 +126,6 @@ foreach ($chunks as $chunk) {
     }
     curl_multi_close($mh);
 
-    // <s
     $end_time = microtime(true);
     $execution_time = $end_time - $start_time;
     if ($execution_time < 1.0) {
@@ -128,11 +134,11 @@ foreach ($chunks as $chunk) {
 }
 
 // 发送报告
-$report_message = "✅ 广播完成！\n\n";
-$report_message .= "📊 最终报告:\n";
-$report_message .= "总目标: {$total_users} 人\n";
-$report_message .= "发送成功: {$success_count} 人\n";
-$report_message .= "发送失败: {$fail_count} 人";
+$report_message = "<tg-emoji emoji-id="5776375003280838798">✅</tg-emoji> <b>广播完成！</b>\n\n";
+$report_message .= "<tg-emoji emoji-id="5994636050033545139">📊</tg-emoji> <b>最终报告:</b>\n";
+$report_message .= "<tg-emoji emoji-id="5942826671290715541">🔎</tg-emoji>总目标: <code>{$total_users}</code> 人\n";
+$report_message .= "<tg-emoji emoji-id="5922612721244704425">🎙</tg-emoji>发送成功: <tg-spoiler>{$success_count}</tg-spoiler> 人\n";
+$report_message .= "<tg-emoji emoji-id="5922712343011135025">🚫</tg-emoji>发送失败: <b>{$fail_count}</b> 人";
 
 sendTelegramRequest($bot_token, 'sendMessage', [
     'chat_id' => $admin_chat_id,
