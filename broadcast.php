@@ -58,7 +58,8 @@ if (!is_array($user_ids) || empty($user_ids)) {
 // 向管理员发送开始通知
 sendTelegramRequest($bot_token, 'sendMessage', [
     'chat_id' => $admin_chat_id,
-    'text' => "<tg-emoji emoji-id="5900104897885376843">⏳</tg-emoji> <b>广播任务已启动...</b>\n<tg-emoji emoji-id="5942877472163892475">👥</tg-emoji>目标用户: <code>" . count($user_ids) . "</code> 人。\n<tg-emoji emoji-id="5935795874251674052">⚡️</tg-emoji>后台运行中，完成后将向您发送报告。"
+    'text' => "<tg-emoji emoji-id='5900104897885376843'>⏳</tg-emoji> <b>广播任务已启动...</b>\n<tg-emoji emoji-id='5942877472163892475'>👥</tg-emoji>目标用户: <code>" . count($user_ids) . "</code> 人。\n<tg-emoji emoji-id='5935795874251674052'>⚡️</tg-emoji>后台运行中，完成后将向您发送报告。",
+    'parse_mode' => 'HTML'
 ]);
 
 $total_users = count($user_ids);
@@ -134,15 +135,17 @@ foreach ($chunks as $chunk) {
 }
 
 // 发送报告
-$report_message = "<tg-emoji emoji-id="5776375003280838798">✅</tg-emoji> <b>广播完成！</b>\n\n";
-$report_message .= "<tg-emoji emoji-id="5994636050033545139">📊</tg-emoji> <b>最终报告:</b>\n";
-$report_message .= "<tg-emoji emoji-id="5942826671290715541">🔎</tg-emoji>总目标: <code>{$total_users}</code> 人\n";
-$report_message .= "<tg-emoji emoji-id="5922612721244704425">🎙</tg-emoji>发送成功: <tg-spoiler>{$success_count}</tg-spoiler> 人\n";
-$report_message .= "<tg-emoji emoji-id="5922712343011135025">🚫</tg-emoji>发送失败: <b>{$fail_count}</b> 人";
+$report_message = "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> <b>广播完成！</b>\n\n";
+$report_message .= "<tg-emoji emoji-id=\"5994636050033545139\">📊</tg-emoji> <b>最终报告:</b>\n";
+$report_message .= "<tg-emoji emoji-id=\"5942826671290715541\">🔎</tg-emoji>总目标: <code>{$total_users}</code> 人\n";
+$report_message .= "<tg-emoji emoji-id=\"5922612721244704425\">🎙</tg-emoji>发送成功: <b>{$success_count}</b> 人\n";
+$report_message .= "<tg-emoji emoji-id=\"5922712343011135025\">🚫</tg-emoji>发送失败: <b>{$fail_count}</b> 人";
+
 
 sendTelegramRequest($bot_token, 'sendMessage', [
     'chat_id' => $admin_chat_id,
-    'text' => $report_message
+    'text' => $report_message,
+    'parse_mode' => 'HTML'
 ]);
 
 logBroadcastError("Broadcast completed. Success: {$success_count}, Failed: {$fail_count}");
