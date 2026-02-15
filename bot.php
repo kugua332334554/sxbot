@@ -650,7 +650,7 @@ function sendAdminBotManagementMenu($chat_id, $message_id = null, $page = 1, $se
     if ($current_page < $total_pages) {
         $next_page = $current_page + 1;
         $pagination_row[] = [
-            'text' => '下一页 ➡️', 
+            'text' => '下一页', 
             'callback_data' => "admin_bot_page:{$next_page}{$search_suffix}",
             'icon_custom_emoji_id' => '5875506366050734240' 
         ];
