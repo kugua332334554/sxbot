@@ -102,29 +102,16 @@ function updateOrAddKeyword($keyword, $field, $value) {
         }
     }
     
-    // 只有在处理 'text' 字段且内容不为空时进行逻辑修正
     if ($field === 'text' && !empty($value)) {
-        // 1. 处理可能的转义：去除反斜杠并将 &lt; 等转回 <
         $value = stripslashes(htmlspecialchars_decode($value, ENT_QUOTES));
-
-        // 2. 正则修正：确保 tg-emoji 标签内只含 Emoji，将普通字符移出
-        // 匹配模式：<tg-emoji ...>内容</tg-emoji>
         $value = preg_replace_callback('/(<tg-emoji[^>]*>)(.*?)(<\/tg-emoji>)/u', function($matches) {
             $tag_open = $matches[1];
             $inner_content = $matches[2];
             $tag_close = $matches[3];
-
-            // 提取内容中的 Emoji（Unicode 范围覆盖绝大多数表情）
-            // 如果内容中包含英文/数字/普通标点，它们会被视为 $other_text
             $emoji_pattern = '/[\x{1F300}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}]/u';
-            
             preg_match_all($emoji_pattern, $inner_content, $emoji_matches);
             $only_emojis = implode('', $emoji_matches[0]);
-            
-            // 获取标签内非 Emoji 的部分
             $other_text = str_replace($emoji_matches[0], '', $inner_content);
-
-            // 返回修正后的结构：<tg-emoji>表情</tg-emoji>普通文本
             return $tag_open . $only_emojis . $tag_close . $other_text;
         }, $value);
     }
