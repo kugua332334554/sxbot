@@ -1,18 +1,15 @@
 <?php
-//验证合法性
+// 验证合法性
 define('SECRET_TOKEN', '__YOUR_SECRET_TOKEN__');
-
 $received_token = $_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? '';
-
 // 验证密钥
 if ($received_token !== SECRET_TOKEN) {
-    // 记录非法请求
     error_log("Unauthorized webhook access attempt. Secret token did not match.");
-    // 返回403
     http_response_code(403);
     die('Forbidden');
 }
 
+// 配置
 define('SUB_BOT_ADMIN_ID', '__SUB_BOT_ADMIN_ID__');
 define('SUB_BOT_USER_TABLE', '__SUB_BOT_USER_TABLE__');
 define('BOT_USERNAME', '__SUB_BOT_USER_TABLE__');
@@ -27,8 +24,6 @@ define('JIANPAN', __DIR__ . '/qidong.txt');
 define('GUANJIANCI', __DIR__ . '/guanjianci.txt'); 
 define('REMOTE_ADS_CONFIG_URL', '你的域名/ads.txt'); 
 define('BROADCAST_SCRIPT_URL', 'https://你的域名/broadcast.php');
-
-
 $db_conn = null;
 
 function updateConfigValue($key, $new_value) {
@@ -66,8 +61,6 @@ function updateStartMessageInConfig($new_message) {
     return updateConfigValue('STARTMESSAGE', $encoded_message);
 }
 
-
-
 function updateStartImageInConfig($new_url) {
     return updateConfigValue('STARTIMG', $new_url);
 }
@@ -90,15 +83,12 @@ function writeJianpanFileContent($content) {
     return $result !== false;
 }
 
-/**
- * 写入guanjianci—-replay文件的内容。
- */
+// 写入guanjianci—-replay文件的内容。
 function writeGuanjianciFileContent($content) {
     if (!defined('GUANJIANCI')) return false;
     $result = @file_put_contents(GUANJIANCI, $content);
     return $result !== false;
 }
-
 
 function updateOrAddKeyword($keyword, $field, $value) {
     $configs = parseGuanjianciFile(true) ?? []; 
@@ -110,6 +100,33 @@ function updateOrAddKeyword($keyword, $field, $value) {
             $found_key = $key;
             break;
         }
+    }
+    
+    // 只有在处理 'text' 字段且内容不为空时进行逻辑修正
+    if ($field === 'text' && !empty($value)) {
+        // 1. 处理可能的转义：去除反斜杠并将 &lt; 等转回 <
+        $value = stripslashes(htmlspecialchars_decode($value, ENT_QUOTES));
+
+        // 2. 正则修正：确保 tg-emoji 标签内只含 Emoji，将普通字符移出
+        // 匹配模式：<tg-emoji ...>内容</tg-emoji>
+        $value = preg_replace_callback('/(<tg-emoji[^>]*>)(.*?)(<\/tg-emoji>)/u', function($matches) {
+            $tag_open = $matches[1];
+            $inner_content = $matches[2];
+            $tag_close = $matches[3];
+
+            // 提取内容中的 Emoji（Unicode 范围覆盖绝大多数表情）
+            // 如果内容中包含英文/数字/普通标点，它们会被视为 $other_text
+            $emoji_pattern = '/[\x{1F300}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}]/u';
+            
+            preg_match_all($emoji_pattern, $inner_content, $emoji_matches);
+            $only_emojis = implode('', $emoji_matches[0]);
+            
+            // 获取标签内非 Emoji 的部分
+            $other_text = str_replace($emoji_matches[0], '', $inner_content);
+
+            // 返回修正后的结构：<tg-emoji>表情</tg-emoji>普通文本
+            return $tag_open . $only_emojis . $tag_close . $other_text;
+        }, $value);
     }
     
     if ($found_key !== null) {
@@ -138,28 +155,10 @@ function deleteKeyword($keyword_to_delete) {
     return reconstructAndWriteGuanjianciFile($new_configs);
 }
 
-
-
+// 将配置数组写入 JSON 文件
 function reconstructAndWriteGuanjianciFile($configs) {
-    $file_content = "";
-    foreach ($configs as $config) {
-        if (empty($config['word'])) continue;
-
-        $file_content .= "{\n";
-        $file_content .= "WORD-" . ($config['word'] ?? '') . "\n";
-        $encoded_text = str_replace("\n", "/n", $config['text'] ?? '');
-        $file_content .= "BACK-" . $encoded_text . "\n";
-        $file_content .= "URL-" . ($config['url'] ?? '') . "\n";
-        
-        if (!empty($config['buttons_raw'])) {
-             foreach($config['buttons_raw'] as $button_line) {
-                 $file_content .= $button_line . "\n";
-             }
-        }
-        $file_content .= "}\n\n";
-    }
-
-    return writeGuanjianciFileContent(trim($file_content));
+    $json_content = json_encode($configs, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    return writeGuanjianciFileContent($json_content);
 }
 
 
@@ -196,9 +195,7 @@ function registerUser($conn, $tg_id, $username, $first_name, $last_name) {
     return $result;
 }
 
-/**
- * 获取用户的角色。
- */
+// 获取用户的角色。
 function getUserRole($conn, $tg_id) {
     if ($conn === null) return 'user'; 
     $table = SUB_BOT_USER_TABLE;
@@ -220,9 +217,7 @@ function getUserRole($conn, $tg_id) {
     return 'admin' === $role ? 'admin' : $role; 
 }
 
-/**
- * 获取用户的输入状态。
- */
+// 获取用户的输入状态。
 function getUserState($conn, $tg_id) {
     if ($conn === null) return 'none'; 
     $table = SUB_BOT_USER_TABLE;
@@ -244,9 +239,7 @@ function getUserState($conn, $tg_id) {
     return $state;
 }
 
-/**
- * 设置用户的输入状态。
- */
+// 设置用户的输入状态。
 function setUserState($conn, $tg_id, $state) {
     if ($conn === null) return false;
     $table = SUB_BOT_USER_TABLE;
@@ -260,9 +253,7 @@ function setUserState($conn, $tg_id, $state) {
     return $result;
 }
 
-/**
- * 更新用户角色。
- */
+// 更新用户角色。
 function updateUserRole($conn, $tg_id, $role) {
     if ($conn === null) return false;
     $table = SUB_BOT_USER_TABLE;
@@ -503,10 +494,7 @@ function getAllUserIds($conn) {
     return $user_ids;
 }
 
-
-/**
- * 从文件路径获取配置值。
- */
+// 从文件路径获取配置值。
 function fetchConfigValueFromFile($file_path, $key) {
     if (!file_exists($file_path) && !filter_var($file_path, FILTER_VALIDATE_URL)) {
         return null;
@@ -539,6 +527,32 @@ function fetchConfigValueFromFile($file_path, $key) {
     return $found_value;
 }
 
+
+function formatTextWithEntities($text, $entities) {
+    if (empty($entities)) return htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+
+    // 将实体按偏移量从后往前排序，避免替换后索引错乱
+    usort($entities, function($a, $b) {
+        return $b['offset'] - $a['offset'];
+    });
+
+    foreach ($entities as $entity) {
+        if ($entity['type'] === 'custom_emoji') {
+            $offset = $entity['offset'];
+            $length = $entity['length'];
+            $emoji_id = $entity['custom_emoji_id'];
+
+            // 提取表情符号
+            $emoji_char = mb_substr($text, $offset, $length, 'UTF-8');
+            // 生成 HTML 标签
+            $html_tag = "<tg-emoji emoji-id=\"$emoji_id\">$emoji_char</tg-emoji>";
+
+            // 替换原文本中的表情符号为标签
+            $text = mb_substr($text, 0, $offset, 'UTF-8') . $html_tag . mb_substr($text, $offset + $length, null, 'UTF-8');
+        }
+    }
+    return $text; // 注意：这里返回的是带 HTML 标签的文本
+}
 
 /**
  *Readpet
@@ -606,9 +620,13 @@ function parseJianpanFile() {
     $content = file_get_contents(JIANPAN);
     if ($content === false) return null;
     
+    // 移除 UTF-8 BOM 头
+    if (substr($content, 0, 3) === "\xef\xbb\xbf") {
+        $content = substr($content, 3);
+    }
+    
     $lines = explode("\n", $content);
     $keyboard = [];
-    
     $has_content = false;
 
     foreach ($lines as $line) {
@@ -618,10 +636,33 @@ function parseJianpanFile() {
         $has_content = true;
         $buttons_text = explode('|', $line);
         $row = [];
+        
         foreach ($buttons_text as $button_text) {
             $trimmed_text = trim($button_text);
             if (!empty($trimmed_text)) {
-                $row[] = ['text' => $trimmed_text];
+                // 匹配模式：文字[颜色]
+                if (preg_match('/^(.*?)\[(.*?)\]$/', $trimmed_text, $matches)) {
+                    $text = trim($matches[1]);
+                    $color_input = trim($matches[2]);
+                    
+                    // 严格匹配您要求的 style 字段值
+                    $style_map = [
+                        '红色' => 'danger',
+                        'danger' => 'danger',
+                        '绿色' => 'success',
+                        'success' => 'success',
+                        '蓝色' => 'primary',
+                        'primary' => 'primary'
+                    ];
+                    
+                    $button_data = ['text' => $text];
+                    if (isset($style_map[$color_input])) {
+                        $button_data['style'] = $style_map[$color_input];
+                    }
+                    $row[] = $button_data;
+                } else {
+                    $row[] = ['text' => $trimmed_text];
+                }
             }
         }
         
@@ -640,42 +681,40 @@ function parseJianpanFile() {
     ];
 }
 
+/**
+ * 解析关键词文件 (JSON 格式)
+ */
 function parseGuanjianciFile($return_raw_structure = false) {
     if (!defined('GUANJIANCI') || !file_exists(GUANJIANCI)) return null;
 
     $content = @file_get_contents(GUANJIANCI);
-    if ($content === false) return null;
+    if ($content === false || empty(trim($content))) return null;
     
+    // 移除 BOM 头
     if (substr($content, 0, 3) === "\xef\xbb\xbf") {
         $content = substr($content, 3);
     }
 
+    $raw_configs = json_decode($content, true);
+    if (!is_array($raw_configs)) return null;
+
+    if ($return_raw_structure) return $raw_configs;
+
     $responses = [];
-    $raw_configs = [];
-    preg_match_all('/\{\s*(.*?)\s*\}/s', $content, $blocks);
+    foreach ($raw_configs as $config) {
+        $keyword = $config['word'] ?? '';
+        if (empty($keyword)) continue;
 
-    foreach ($blocks[1] as $block_content) {
-        $lines = explode("\n", $block_content);
-        $config = ['word' => '', 'text' => '', 'url' => '', 'markup' => [], 'buttons_raw' => []];
         $inline_keyboard = [];
-
-        foreach ($lines as $line) {
-            $trimmed_line = trim($line);
-            if (empty($trimmed_line)) continue;
-
-            if (strpos($trimmed_line, 'WORD-') === 0) {
-                $config['word'] = trim(substr($trimmed_line, 5));
-            } elseif (strpos($trimmed_line, 'BACK-') === 0) {
-                $raw_text = trim(substr($trimmed_line, 5));
-                $config['text'] = str_replace("/n", "\n", $raw_text);
-            } elseif (strpos($trimmed_line, 'URL-') === 0) {
-                $config['url'] = trim(substr($trimmed_line, 4));
-            } else {
-                $buttons_text = explode('|', $trimmed_line);
+        if (!empty($config['buttons_raw']) && is_array($config['buttons_raw'])) {
+            foreach ($config['buttons_raw'] as $line) {
+                $buttons_text = explode('|', $line);
                 $row = [];
                 foreach ($buttons_text as $button_pair) {
-                    if (strpos($button_pair, '-') !== false) {
-                        list($btn_text, $btn_url) = explode('-', $button_pair, 2);
+                    if (strpos($button_pair, '+') !== false) {
+                        // 支持格式: [按钮名 + URL]
+                        $clean_pair = trim($button_pair, " []");
+                        list($btn_text, $btn_url) = explode('+', $clean_pair, 2);
                         $trimmed_text = trim($btn_text);
                         $trimmed_url = trim($btn_url);
                         if (!empty($trimmed_text) && filter_var($trimmed_url, FILTER_VALIDATE_URL)) {
@@ -683,45 +722,37 @@ function parseGuanjianciFile($return_raw_structure = false) {
                         }
                     }
                 }
-                if (!empty($row)) {
-                    $inline_keyboard[] = $row;
-                    $config['buttons_raw'][] = $trimmed_line;
-                }
+                if (!empty($row)) $inline_keyboard[] = $row;
             }
         }
-        
-        if (!empty($config['word'])) {
-            if (!empty($inline_keyboard)) {
-                $config['markup'] = ['inline_keyboard' => $inline_keyboard];
-            }
-            $config['text'] = trim($config['text']);
-            
-            $raw_configs[] = $config;
-            $responses[strtolower(str_replace(' ', '', $config['word']))] = [
-                'text' => $config['text'],
-                'url' => $config['url'],
-                'markup' => $config['markup']
-            ];
-        }
+
+        $responses[strtolower(str_replace(' ', '', $keyword))] = [
+            'text' => $config['text'] ?? '',
+            'url' => $config['url'] ?? '',
+            'markup' => !empty($inline_keyboard) ? ['inline_keyboard' => $inline_keyboard] : null
+        ];
     }
-    
-    return $return_raw_structure ? $raw_configs : (empty($responses) ? null : $responses);
+
+    return $responses;
 }
 
 
-function sendTelegramMessage($chat_id, $text, $parse_mode = null, $reply_markup = null) {
+/**
+ * 发送纯文本消息 (配套修改)
+ */
+function sendTelegramMessage($chat_id, $text, $parse_mode = 'HTML', $reply_markup = null) {
     if (!defined('BOT_TOKEN')) return false;
 
     $url = 'https://api.telegram.org/bot' . BOT_TOKEN . '/sendMessage';
-    $final_text = $text;
-    $json_reply_markup = $reply_markup ? json_encode($reply_markup) : null;
+    $data = [
+        'chat_id' => $chat_id, 
+        'text' => $text,
+        'parse_mode' => $parse_mode,
+        'reply_markup' => $reply_markup ? json_encode($reply_markup) : null,
+        'disable_web_page_preview' => true
+    ];
 
-    $data = ['chat_id' => $chat_id, 'text' => $final_text];
-    if ($parse_mode) $data['parse_mode'] = $parse_mode;
-    if ($json_reply_markup) $data['reply_markup'] = $json_reply_markup;
-    $data['disable_web_page_preview'] = true;
-
-    $options = ['http' => ['method' => 'POST', 'header' => 'Content-type: application/x-www-form-urlencoded', 'content' => http_build_query($data), 'verify_peer' => false, 'verify_peer_name' => false]];
+    $options = ['http' => ['method' => 'POST', 'header' => 'Content-type: application/x-www-form-urlencoded', 'content' => http_build_query(array_filter($data)), 'verify_peer' => false, 'verify_peer_name' => false]];
 
     $context  = stream_context_create($options);
     $result = @file_get_contents($url, false, $context);
@@ -751,19 +782,29 @@ function editTelegramMessage($chat_id, $message_id, $text, $parse_mode = null, $
 
 /**
  * 发送照片
+ * 修改点：新增 $parse_mode 参数，默认为 'HTML'
  */
-function sendTelegramPhoto($chat_id, $photo_url, $caption = null, $reply_markup = null) {
+function sendTelegramPhoto($chat_id, $photo_url, $caption = null, $reply_markup = null, $parse_mode = 'HTML') {
     if (!defined('BOT_TOKEN')) return false;
 
     $url = 'https://api.telegram.org/bot' . BOT_TOKEN . '/sendPhoto';
-    $json_reply_markup = $reply_markup ? json_encode($reply_markup) : null;
+    $data = [
+        'chat_id' => $chat_id, 
+        'photo' => $photo_url,
+        'caption' => $caption,
+        'parse_mode' => $parse_mode, // 支持 HTML 标签
+        'reply_markup' => $reply_markup ? json_encode($reply_markup) : null
+    ];
 
-    $data = ['chat_id' => $chat_id, 'photo' => $photo_url];
-    if ($caption) $data['caption'] = $caption;
-    if ($json_reply_markup) $data['reply_markup'] = $json_reply_markup;
-    $data['disable_web_page_preview'] = true;
-
-    $options = ['http' => ['method'  => 'POST', 'header'  => 'Content-type: application/x-www-form-urlencoded', 'content' => http_build_query($data), 'verify_peer' => false, 'verify_peer_name' => false]];
+    $options = [
+        'http' => [
+            'method'  => 'POST', 
+            'header'  => 'Content-type: application/x-www-form-urlencoded', 
+            'content' => http_build_query(array_filter($data)), 
+            'verify_peer' => false, 
+            'verify_peer_name' => false
+        ]
+    ];
 
     $context  = stream_context_create($options);
     $result = @file_get_contents($url, false, $context);
@@ -771,19 +812,21 @@ function sendTelegramPhoto($chat_id, $photo_url, $caption = null, $reply_markup 
 }
 
 /**
- * 发送视频
+ * 发送视频 (配套修改)
  */
-function sendTelegramVideo($chat_id, $video_url, $caption = null, $reply_markup = null) {
+function sendTelegramVideo($chat_id, $video_url, $caption = null, $reply_markup = null, $parse_mode = 'HTML') {
     if (!defined('BOT_TOKEN')) return false;
 
     $url = 'https://api.telegram.org/bot' . BOT_TOKEN . '/sendVideo';
-    $json_reply_markup = $reply_markup ? json_encode($reply_markup) : null;
+    $data = [
+        'chat_id' => $chat_id, 
+        'video' => $video_url,
+        'caption' => $caption,
+        'parse_mode' => $parse_mode,
+        'reply_markup' => $reply_markup ? json_encode($reply_markup) : null
+    ];
 
-    $data = ['chat_id' => $chat_id, 'video' => $video_url];
-    if ($caption) $data['caption'] = $caption;
-    if ($json_reply_markup) $data['reply_markup'] = $json_reply_markup;
-
-    $options = ['http' => ['method'  => 'POST', 'header'  => 'Content-type: application/x-www-form-urlencoded', 'content' => http_build_query($data), 'verify_peer' => false, 'verify_peer_name' => false]];
+    $options = ['http' => ['method' => 'POST', 'header' => 'Content-type: application/x-www-form-urlencoded', 'content' => http_build_query(array_filter($data)), 'verify_peer' => false, 'verify_peer_name' => false]];
 
     $context  = stream_context_create($options);
     $result = @file_get_contents($url, false, $context);
@@ -884,7 +927,13 @@ function replaceKeywordVariables($text, $user_info) {
         '$nickname' => $nickname_display,
     ];
 
-    return str_replace(array_keys($replacements), array_values($replacements), $text);
+    // 先进行变量替换，然后再处理HTML标签
+    $replaced_text = str_replace(array_keys($replacements), array_values($replacements), $text);
+    
+    // 确保tg-emoji标签格式正确（如果需要的话）
+    // 这里不做额外处理，保持原始格式
+    
+    return $replaced_text;
 }
 
 
@@ -902,31 +951,66 @@ function getAdminMainMenu($conn) {
     $markup = [
         'inline_keyboard' => [
             [
-                ['text' => '👋 启动消息', 'callback_data' => 'menu_start_message'],
-                ['text' => '📷 启动媒体', 'callback_data' => 'menu_start_media']
+                [
+                    'text' => '启动消息', 
+                    'callback_data' => 'menu_start_message',
+                    'icon_custom_emoji_id' => '5994750571041525522'
+                ],
+                [
+                    'text' => '启动媒体', 
+                    'callback_data' => 'menu_start_media',
+                    'icon_custom_emoji_id' => '5890744068203352126'
+                ]
             ],
             [
-                ['text' => '📘 底部按钮', 'callback_data' => 'menu_keyboard'],
-                ['text' => '🤖 关键词回复', 'callback_data' => 'menu_keywords_list']
+                [
+                    'text' => '底部按钮', 
+                    'callback_data' => 'menu_keyboard',
+                    'icon_custom_emoji_id' => '6008258140108231117'
+                ],
+                [
+                    'text' => '关键词回复', 
+                    'callback_data' => 'menu_keywords_list',
+                    'icon_custom_emoji_id' => '5886666250158870040'
+                ]
             ],
             [
-                 ['text' => '📊 数据统计', 'callback_data' => 'menu_stats'],
-                 ['text' => '👥 用户管理', 'callback_data' => 'menu_user_management']
+                [
+                    'text' => '数据统计', 
+                    'callback_data' => 'menu_stats',
+                    'icon_custom_emoji_id' => '5931472654660800739'
+                ],
+                [
+                    'text' => '用户管理', 
+                    'callback_data' => 'menu_user_management',
+                    'icon_custom_emoji_id' => '5942877472163892475'
+                ]
             ],
             [
-                ['text' => '📖 使用教程', 'callback_data' => 'menu_tutorial']  // 新增教程按钮
+                [
+                    'text' => '使用教程', 
+                    'callback_data' => 'menu_tutorial',
+                    'icon_custom_emoji_id' => '5411369574157286161'
+                ]
             ]
         ]
     ];
     
     if (getBotCostStatus($conn) === 'free') {
-        $markup['inline_keyboard'][] = [['text' => '🔓 去解锁高级功能', 'url' => 'https://t.me/你的主Bot用户名']];
+        $markup['inline_keyboard'][] = [
+            [
+                'text' => '去解锁高级功能', 
+                'url' => 'https://t.me/你的主Bot用户名',
+                'icon_custom_emoji_id' => '6034962180875490251'
+            ]
+        ];
     }
     
     return ['text' => $text, 'markup' => $markup];
 }
 
 
+// 核心响应发送函数
 function sendResponse(
     $chat_id, 
     $text_content, 
@@ -937,30 +1021,27 @@ function sendResponse(
     $success = true;
 
     if ($reply_keyboard_markup !== null) {
-        sendTelegramMessage($chat_id, "键盘加载成功", null, $reply_keyboard_markup);
+        sendTelegramMessage($chat_id, "键盘加载成功", 'HTML', $reply_keyboard_markup);
     }
-
     if (!empty($media_url) && filter_var($media_url, FILTER_VALIDATE_URL)) {
         $path = parse_url($media_url, PHP_URL_PATH);
         $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
 
         $is_media_sent = false;
-
         if (in_array($extension, ['mp4', 'mov'])) {
-            $is_media_sent = sendTelegramVideo($chat_id, $media_url, $text_content, $inline_markup);
-        } elseif (in_array($extension, ['jpg', 'jpeg', 'png', 'gif', ''])) { 
-            $is_media_sent = sendTelegramPhoto($chat_id, $media_url, $text_content, $inline_markup);
+            $is_media_sent = sendTelegramVideo($chat_id, $media_url, $text_content, $inline_markup, 'HTML');
         } else {
-            $is_media_sent = sendTelegramPhoto($chat_id, $media_url, $text_content, $inline_markup);
+            // 默认作为图片发送
+            $is_media_sent = sendTelegramPhoto($chat_id, $media_url, $text_content, $inline_markup, 'HTML');
         }
-
         if (!$is_media_sent) {
-            $error_caption = $text_content . "\n\n❌ 媒体 URL 无效或格式不受支持，已转为纯文本发送。";
-            $success = sendTelegramMessage($chat_id, $error_caption, null, $inline_markup);
+            $error_caption = $text_content . "\n\n⚠️ _(媒体链接无效，已转为文本发送)_";
+            $success = sendTelegramMessage($chat_id, $error_caption, 'HTML', $inline_markup);
         }
     } else {
+        // 无媒体 URL，发送纯文本或仅发送内联按钮
         if (!empty($text_content) || !empty($inline_markup)) {
-            $success = sendTelegramMessage($chat_id, $text_content ?: "请选择一个操作", null, $inline_markup);
+            $success = sendTelegramMessage($chat_id, $text_content ?: "请选择操作", 'HTML', $inline_markup);
         } else {
             $success = false;
         }
@@ -990,149 +1071,166 @@ if ($user_role === 'admin' && isset($update['callback_query'])) {
     }
     answerCallbackQuery($callback_query_id);
 
-    if ($callback_data === 'menu_main') {
-        $menu = getAdminMainMenu($conn);
-        editTelegramMessage($admin_id, $message_id, $menu['text'], null, $menu['markup']);
-    }
-    
+if ($callback_data === 'menu_main') {
+    $menu = getAdminMainMenu($conn);
+    editTelegramMessage($admin_id, $message_id, $menu['text'], 'HTML', $menu['markup']);
+} 
+
         elseif ($callback_data === 'menu_tutorial') {
-        $tutorial_text = "📖 **机器人使用教程**\n\n";
+        $tutorial_text = "<tg-emoji emoji-id=\"5411369574157286161\">📖</tg-emoji> <b>机器人使用教程</b>\n\n";
         $tutorial_text .= "═══════════════════\n";
-        $tutorial_text .= "**🎯 基础设置**\n\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5256131095094652290\">🎯</tg-emoji> 基础设置</b>\n\n";
         
-        $tutorial_text .= "**1️⃣ 启动消息设置**\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5798659067433980717\">1️⃣</tg-emoji> 启动消息设置</b>\n";
         $tutorial_text .= "• 点击「启动消息」→「修改消息文本」\n";
         $tutorial_text .= "• 支持变量：\n";
-        $tutorial_text .= "  `{{username}}` - 显示用户名\n";
-        $tutorial_text .= "  `{{userid}}` - 显示用户ID\n";
-        $tutorial_text .= "  `{{nickname}}` - 显示昵称\n\n";
+        $tutorial_text .= "  <code>{{username}}</code> - 显示用户名\n";
+        $tutorial_text .= "  <code>{{userid}}</code> - 显示用户ID\n";
+        $tutorial_text .= "  <code>{{nickname}}</code> - 显示昵称\n\n";
         
-        $tutorial_text .= "**2️⃣ 启动媒体设置**\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5794303034292968945\">2️⃣</tg-emoji> 启动媒体设置</b>\n";
         $tutorial_text .= "• 点击「启动媒体」输入图片/视频URL\n";
         $tutorial_text .= "• 访问 https://a9a25fe3.telegraph-image-cp8.pages.dev 上传图片获取链接\n";
-        $tutorial_text .= "• 发送 `none` 可清除媒体\n\n";
+        $tutorial_text .= "• 发送 <code>none</code> 可清除媒体\n\n";
         
-        $tutorial_text .= "**3️⃣ 内联按钮设置**\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5798869482176779018\">3️⃣</tg-emoji> 内联按钮设置</b>\n";
         $tutorial_text .= "• 点击「启动消息」→「修改内联按钮」\n";
-        $tutorial_text .= "• 格式：`[按钮名+链接] [另一按钮+链接]`\n";
-        $tutorial_text .= "• 示例：`[官网+https://example.com] [频道+https://t.me/channel]`\n";
+        $tutorial_text .= "• 格式：<code>[按钮名+链接] [另一按钮+链接]</code>\n";
+        $tutorial_text .= "• 示例：<code>[官网+https://example.com] [频道+https://t.me/channel]</code>\n";
         $tutorial_text .= "• 每行一排按钮\n\n";
         
-        $tutorial_text .= "**4️⃣ 底部按钮设置**\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5793901252987330401\">4️⃣</tg-emoji> 底部按钮设置</b>\n";
         $tutorial_text .= "• 点击「底部按钮」输入配置\n";
-        $tutorial_text .= "• 格式：`按钮1 | 按钮2 | 按钮3`\n";
-        $tutorial_text .= "• 示例：`帮助 | 关于 | 联系我们`\n";
-        $tutorial_text .= "• 每行一排，用 `|` 分隔\n";
-        $tutorial_text .= "• 发送 `none` 可清除键盘\n\n";
+        $tutorial_text .= "• 格式：<code>按钮1 | 按钮2 | 按钮3</code>\n";
+        $tutorial_text .= "• 示例：<code>帮助 | 关于 | 联系我们</code>\n";
+        $tutorial_text .= "• 每行一排，用 <code>|</code> 分隔\n";
+        $tutorial_text .= "• 发送 <code>none</code> 可清除键盘\n\n";
         
         $tutorial_text .= "═══════════════════\n";
-        $tutorial_text .= "**🤖 关键词回复**\n\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5931415565955503486\">🤖</tg-emoji> 关键词回复</b>\n\n";
         
-        $tutorial_text .= "**添加关键词：**\n";
-        $tutorial_text .= "• 点击「关键词回复」→「➕ 添加新关键词」\n";
-        $tutorial_text .= "• 输入关键词（如：`价格`）\n";
+        $tutorial_text .= "<b>添加关键词：</b>\n";
+        $tutorial_text .= "• 点击「关键词回复」→「<tg-emoji emoji-id=\"5775937998948404844\">➕</tg-emoji> 添加新关键词」\n";
+        $tutorial_text .= "• 输入关键词（如：<code>价格</code>）\n";
         $tutorial_text .= "• 设置回复文本、媒体、按钮\n\n";
         
-        $tutorial_text .= "**关键词支持变量：**\n";
-        $tutorial_text .= "• `$username` - 用户名（注意去掉空格）\n";
-        $tutorial_text .= "• `$userid` - 用户ID\n";
-        $tutorial_text .= "• `$nickname` - 昵称\n\n";
+        $tutorial_text .= "<b>关键词支持变量：</b>\n";
+        $tutorial_text .= "• <code>$username</code> - 用户名（注意去掉空格）\n";
+        $tutorial_text .= "• <code>$userid</code> - 用户ID\n";
+        $tutorial_text .= "• <code>$nickname</code> - 昵称\n\n";
         
-        $tutorial_text .= "**按钮格式：**\n";
-        $tutorial_text .= "• `按钮名-链接|另一按钮-链接`\n";
-        $tutorial_text .= "• 示例：`查看详情-https://example.com|联系客服-https://t.me/support`\n";
-        $tutorial_text .= "• 发送 `none` 清除按钮\n\n";
+        $tutorial_text .= "<b>按钮格式：</b>\n";
+        $tutorial_text .= "• <code>按钮名-链接|另一按钮-链接</code>\n";
+        $tutorial_text .= "• 示例：<code>查看详情-https://example.com|联系客服-https://t.me/support</code>\n";
+        $tutorial_text .= "• 发送 <code>none</code> 清除按钮\n\n";
         
-        $tutorial_text .= "**预览功能：**\n";
-        $tutorial_text .= "• 编辑关键词时点击「👀 预览回复」\n";
+        $tutorial_text .= "<b>预览功能：</b>\n";
+        $tutorial_text .= "• 编辑关键词时点击「<tg-emoji emoji-id=\"5280881372418816002\">👀</tg-emoji> 预览回复」\n";
         $tutorial_text .= "• 查看实际效果（包括变量替换）\n\n";
         
         $tutorial_text .= "═══════════════════\n";
-        $tutorial_text .= "**👥 用户管理**\n\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5942877472163892475\">👥</tg-emoji> 用户管理</b>\n\n";
         
-        $tutorial_text .= "**封禁用户：**\n";
-        $tutorial_text .= "• 方式1：点击用户通知下的「永久封禁该用户 🚫」按钮\n";
-        $tutorial_text .= "• 方式2：发送 `/ban 用户ID`\n";
+        $tutorial_text .= "<b>封禁用户：</b>\n";
+        $tutorial_text .= "• 方式1：点击用户通知下的「永久封禁该用户 <tg-emoji emoji-id=\"5922712343011135025\">🚫</tg-emoji>」按钮\n";
+        $tutorial_text .= "• 方式2：发送 <code>/ban 用户ID</code>\n";
         $tutorial_text .= "• 被封禁用户的消息不会转发给管理员\n\n";
         
-        $tutorial_text .= "**解除封禁：**\n";
-        $tutorial_text .= "• 发送 `/unban 用户ID`\n\n";
+        $tutorial_text .= "<b>解除封禁：</b>\n";
+        $tutorial_text .= "• 发送 <code>/unban 用户ID</code>\n\n";
         
-        $tutorial_text .= "**管理员设置：**\n";
-        $tutorial_text .= "• 点击「用户管理」→「👑 查看管理员」\n";
+        $tutorial_text .= "<b>管理员设置：</b>\n";
+        $tutorial_text .= "• 点击「用户管理」→「<tg-emoji emoji-id=\"5807868868886009920\">👑</tg-emoji> 查看管理员」\n";
         $tutorial_text .= "• 可添加/删除管理员\n";
         $tutorial_text .= "• 被添加者必须先启动过机器人\n\n";
         
         $tutorial_text .= "═══════════════════\n";
-        $tutorial_text .= "**📢 广播功能**\n\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5771695636411847302\">📢</tg-emoji> 广播功能</b>\n\n";
         
-        $tutorial_text .= "**发送文字广播：**\n";
-        $tutorial_text .= "• 发送 `/gb 你的广播内容`\n";
-        $tutorial_text .= "• 示例：`/gb 系统维护通知：明天10点停机`\n\n";
+        $tutorial_text .= "<b>发送文字广播：</b>\n";
+        $tutorial_text .= "• 发送 <code>/gb 你的广播内容</code>\n";
+        $tutorial_text .= "• 示例：<code>/gb 系统维护通知：明天10点停机</code>\n\n";
         
-        $tutorial_text .= "**发送图片广播：**\n";
-        $tutorial_text .= "• 上传图片，在标题中输入 `/gb 图片说明文字`\n";
+        $tutorial_text .= "<b>发送图片广播：</b>\n";
+        $tutorial_text .= "• 上传图片，在标题中输入 <code>/gb 图片说明文字</code>\n";
         $tutorial_text .= "• 完成后收到报告\n\n";
         
         $tutorial_text .= "═══════════════════\n";
-        $tutorial_text .= "**💬 客服对话**\n\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5884510167986343350\">💬</tg-emoji> 客服对话</b>\n\n";
         
         $tutorial_text .= "• 用户发送的消息会自动转发给所有管理员\n";
-        $tutorial_text .= "• **回复用户消息**：直接回复转发的消息即可\n";
+        $tutorial_text .= "• <b>回复用户消息</b>：直接回复转发的消息即可\n";
         $tutorial_text .= "• 回复后会自动发送给对应用户\n";
         $tutorial_text .= "• 支持回复文字、图片、视频等\n\n";
         
         $tutorial_text .= "═══════════════════\n";
-        $tutorial_text .= "**🎓 实用技巧**\n\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5992157823838984339\">🎓</tg-emoji> 实用技巧</b>\n\n";
         
-        $tutorial_text .= "• 清除设置：输入 `none` 可清空对应配置\n";
+        $tutorial_text .= "• 清除设置：输入 <code>none</code> 可清空对应配置\n";
         $tutorial_text .= "• 预览效果：先预览再保存，确保效果正确\n";
-        $tutorial_text .= "• 变量使用：启动消息用 `{{}}` ，关键词用 `$`\n";
+        $tutorial_text .= "• 变量使用：启动消息用 <code>{{}}</code> ，关键词用 <code>$</code>\n";
         $tutorial_text .= "• 数据统计：随时查看用户、管理员、封禁数量\n\n";
         
         $tutorial_text .= "═══════════════════\n";
-        $tutorial_text .= "**❓ 常见问题**\n\n";
+        $tutorial_text .= "<b><tg-emoji emoji-id=\"5873121512445187130\">❓</tg-emoji> 常见问题</b>\n\n";
         
-        $tutorial_text .= "**Q：如何让关键词支持多个触发词？**\n";
+        $tutorial_text .= "<b>Q：如何让关键词支持多个触发词？</b>\n";
         $tutorial_text .= "A：系统会检测用户消息是否包含关键词，所以一个关键词可匹配多种说法\n\n";
         
         $tutorial_text .= "═══════════════════\n";
-        $tutorial_text .= "💡 需要帮助？请联系主Bot获取支持";
-        
-        $markup = [
-            'inline_keyboard' => [
-                [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]
+        $tutorial_text .= "<tg-emoji emoji-id=\"5935795874251674052\">💡</tg-emoji> 需要帮助？请联系主Bot获取支持";
+    
+    $markup = [
+        'inline_keyboard' => [
+            [
+                [
+                    'text' => '返回主菜单', 
+                    'callback_data' => 'menu_main',
+                    'icon_custom_emoji_id' => '5877629862306385808'
+                ]
             ]
-        ];
-        
-        editTelegramMessage($admin_id, $message_id, $tutorial_text, 'Markdown', $markup);
-    }
-
+        ]
+    ];
+    
+    editTelegramMessage($admin_id, $message_id, $tutorial_text, 'HTML', $markup);
+}
 
     elseif ($callback_data === 'menu_start_message') {
-        $text = "👋 **启动消息管理**\n\n请选择要修改的部分：";
-        $markup = [
-            'inline_keyboard' => [
-                [['text' => '✍️ 修改消息文本', 'callback_data' => 'edit_start_text']],
-                [['text' => '🔗 修改内联按钮', 'callback_data' => 'edit_start_buttons']],
-                [['text' => '👀 预览启动消息', 'callback_data' => 'preview_start_message']],
-                [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]
-            ]
-        ];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
-    }
+    $text = "<tg-emoji emoji-id=\"5994750571041525522\">👋</tg-emoji> <b>启动消息管理</b>\n\n<tg-emoji emoji-id=\"5879841310902324730\">✏️</tg-emoji>请选择要修改的部分：";
+    
+    $markup = [
+        'inline_keyboard' => [
+            [[
+                'text' => '修改消息文本', 
+                'callback_data' => 'edit_start_text', 
+                'icon_custom_emoji_id' => '6005695599410679642'
+            ]],
+            [[
+                'text' => '修改内联按钮', 
+                'callback_data' => 'edit_start_buttons', 
+                'icon_custom_emoji_id' => '6008258140108231117' 
+            ]],
+            [[
+                'text' => '预览启动消息', 
+                'callback_data' => 'preview_start_message', 
+                'icon_custom_emoji_id' => '6005652452169224347' 
+            ]],
+            [[
+                'text' => '返回主菜单', 
+                'callback_data' => 'menu_main', 
+                'icon_custom_emoji_id' => '5877629862306385808' 
+            ]]
+        ]
+    ];
+    editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
+}
 
     elseif ($callback_data === 'preview_start_message') {
-        // 获取配置
         $start_message = str_replace("\\n", "\n", getConfigValue('STARTMESSAGE') ?? "【未设置启动消息】");
         $start_img_url = getConfigValue('STARTIMG');
         $inline_keyboard_markup = parseAnnniuFile();
-        
-        // 使用管理员的信息替换变量进行预览
         $admin_info = ['id' => $admin_id, 'username' => $update['callback_query']['from']['username'] ?? 'Admin', 'first_name' => 'Admin', 'last_name' => 'Preview'];
         $start_message = replaceUserVariables($start_message, $admin_info);
-        
-        // 发送预览
         sendResponse($admin_id, $start_message, $start_img_url, $inline_keyboard_markup);
         answerCallbackQuery($callback_query_id, "已发送预览消息");
     }
@@ -1144,7 +1242,7 @@ if ($user_role === 'admin' && isset($update['callback_query'])) {
         $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'menu_start_message']]]];
         editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
     }
-elseif ($callback_data === 'edit_start_buttons') {
+    elseif ($callback_data === 'edit_start_buttons') {
         setUserState($conn, $admin_id, 'awaiting_start_buttons');
         $current_buttons = file_exists(ANNIU) ? file_get_contents(ANNIU) : '【空】';
         $text = "当前的内联按钮配置如下:\n格式: `[按钮名+链接] [另一按钮+链接]`\n\n`" . $current_buttons . "`\n\n现在请发送新的按钮配置。\n发送 none 清除按钮配置。";
@@ -1163,9 +1261,19 @@ elseif ($callback_data === 'edit_start_buttons') {
     elseif ($callback_data === 'menu_keyboard') {
         setUserState($conn, $admin_id, 'awaiting_keyboard');
         $current_keyboard = file_exists(JIANPAN) ? file_get_contents(JIANPAN) : '【空】';
-        $text = "🔘 **底部按钮管理**\n\n当前的底部按钮配置如下 (qidong.txt):\n格式: `按钮1 | 按钮2` (每行一排)\n\n`" . $current_keyboard . "`\n\n现在请发送新的底部按钮配置。\n\n发送 none 即可清除键盘。";
+        
+
+        $text = "<tg-emoji emoji-id=\"5877629862306385808\">🔘</tg-emoji> <b>底部按钮管理</b>\n\n" .
+                "<tg-emoji emoji-id=\"5935815201604507257\">🔘</tg-emoji>当前的底部按钮配置如下:\n" .
+                "基础格式: <code>按钮1 | 按钮2</code>\n" .
+                "颜色格式: <code>按钮1[蓝色] | 按钮2[红色]</code>\n" .
+                "支持颜色: 蓝色、红色、绿色、橙色\n\n" .
+                "当前配置:\n<code>" . $current_keyboard . "</code>\n\n" .
+                "<tg-emoji emoji-id=\"5886455371559604605\">➡️</tg-emoji>现在请发送新的底部按钮配置。\n\n" .
+                "<tg-emoji emoji-id=\"6007942490076745785\">🧹</tg-emoji>发送 <code>none</code> 即可清除键盘。";
+                
         $markup = ['inline_keyboard' => [[['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]]];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
 
     elseif ($callback_data === 'menu_keywords_list' || strpos($callback_data, 'keyword_back_list') === 0) {
@@ -1179,6 +1287,7 @@ elseif ($callback_data === 'edit_start_buttons') {
             }
         }
         $keyboard[] = [['text' => '➕ 添加新关键词', 'callback_data' => 'keyword_add']];
+        $keyboard[] = [['text' => '🗑️ 清理并重置 JSON 格式', 'callback_data' => 'admin_clear_keywords']];
         $keyboard[] = [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']];
         $markup = ['inline_keyboard' => $keyboard];
         editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
@@ -1266,9 +1375,9 @@ elseif ($callback_data === 'edit_start_buttons') {
             $admin_info = ['id' => $admin_id, 'username' => $update['callback_query']['from']['username'] ?? 'Admin', 'first_name' => 'Admin', 'last_name' => 'Preview'];
             $reply_text = replaceKeywordVariables($reply_text, $admin_info);
 
-            // 发送预览
-            sendResponse($admin_id, $reply_text, $reply_url, $reply_markup);
-            answerCallbackQuery($callback_query_id, "已发送预览回复");
+            // 直接发送，不进行额外的HTML转义
+            sendTelegramMessage($admin_id, $reply_text, 'HTML', $reply_markup);
+            answerCallbackQuery($callback_query_id, "已发送预览回复（支持HTML标签）");
         } else {
             answerCallbackQuery($callback_query_id, "找不到该关键词配置", true);
         }
@@ -1320,6 +1429,7 @@ elseif ($callback_data === 'edit_start_buttons') {
         editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
     }
 
+    
 
     // --- 统计与用户管理 ---
     elseif ($callback_data === 'menu_stats') {
@@ -1333,6 +1443,23 @@ elseif ($callback_data === 'edit_start_buttons') {
          $markup = ['inline_keyboard' => [[['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]]];
          editTelegramMessage($admin_id, $message_id, $stats_message, 'Markdown', $markup);
     }
+    // 在 switch ($callback_data) 或 if-else 链中添加
+    elseif ($callback_data === 'admin_clear_keywords') {
+    // 写入一个空的 JSON 数组
+        if (reconstructAndWriteGuanjianciFile([])) {
+            answerCallbackQuery($callback_query_id, "✅ 文件已清理并初始化为 JSON 格式", true);
+        // 刷新页面
+            $text = "🤖 **关键词管理**\n\n库已清空，请重新添加。";
+            $markup = ['inline_keyboard' => [
+                [['text' => '➕ 添加新关键词', 'callback_data' => 'keyword_add']],
+                [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]
+            ]];
+            editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        } else {
+            answerCallbackQuery($callback_query_id, "❌ 清理失败，请检查文件权限", true);
+        }
+    }
+
     elseif ($callback_data === 'menu_user_management') {
         $text = "👥 **用户管理**\n\n请选择要进行的操作：";
         $markup = [
@@ -1450,7 +1577,7 @@ if ($user_id) {
         // 未注册用户发送非/start消息：标记为未注册
         $user_role = 'unregistered';
     }
-} else {
+    } else {
         // 未注册用户，设置特殊角色标识
         $user_role = 'unregistered';
     }
@@ -1471,20 +1598,21 @@ if ($user_id) {
             sendTelegramMessage($chat_id, $success ? "✅ 更新成功！" : "❌ 操作失败！");
             setUserState($conn, $user_id, 'none');
         }
-
-
-        elseif (strpos($current_state, 'awaiting_keyword_text_') === 0) {
-            $encoded_kw = substr($current_state, strlen('awaiting_keyword_text_'));
-            $success = updateOrAddKeyword(base64_decode($encoded_kw), 'text', $text);
-            if ($success) {
-                $message = "✅ 文本更新成功！";
-                $markup = ['inline_keyboard' => [[['text' => '🔙 返回', 'callback_data' => 'keyword_edit_' . $encoded_kw]]]];
-                sendTelegramMessage($chat_id, $message, null, $markup);
-            } else {
-                sendTelegramMessage($chat_id, "❌ 操作失败！");
-            }
-            setUserState($conn, $user_id, 'none');
-        }
+elseif (strpos($current_state, 'awaiting_keyword_text_') === 0) {
+    $encoded_kw = substr($current_state, strlen('awaiting_keyword_text_'));
+    $entities = $update['message']['entities'] ?? [];
+    $processed_text = formatTextWithEntities($text, $entities);
+    // 3. 执行更新
+    $success = updateOrAddKeyword(base64_decode($encoded_kw), 'text', $processed_text);
+    if ($success) {
+        $message = "✅ 文本更新成功！";
+        $markup = ['inline_keyboard' => [[['text' => '🔙 返回', 'callback_data' => 'keyword_edit_' . $encoded_kw]]]];
+        sendTelegramMessage($chat_id, $message, null, $markup);
+    } else {
+        sendTelegramMessage($chat_id, "❌ 操作失败！");
+    }
+    setUserState($conn, $user_id, 'none');
+}
         elseif (strpos($current_state, 'awaiting_keyword_url_') === 0) {
             $encoded_kw = substr($current_state, strlen('awaiting_keyword_url_'));
             $value = (strtolower(trim($text)) === 'none') ? '' : $text;
@@ -1679,7 +1807,6 @@ if ($user_id) {
         if (isset($conn) && $conn) $conn->close();
         exit();
     }
-
     // 立即回复管理员,任务已提交
     sendTelegramMessage($chat_id, "📤 广播任务已提交到后台处理...\n目标用户: {$total_users} 人。\n\n请稍等,完成后将向您发送报告。");
 
@@ -1723,7 +1850,22 @@ elseif ($user_role !== 'admin' && $user_role !== 'ban' && $user_role !== 'unregi
                 if (strpos($user_input_normalized, (string)$keyword) !== false) {
                     $user_info = ['id' => $user_id, 'username' => $username, 'first_name' => $first_name, 'last_name' => $last_name];
                     $response_config['text'] = replaceKeywordVariables($response_config['text'], $user_info);
-                    sendResponse($chat_id, $response_config['text'], $response_config['url'], $response_config['markup']);
+                    
+                    // 使用 sendTelegramMessage 直接发送，确保 HTML 解析模式
+                    if (!empty($response_config['url']) && filter_var($response_config['url'], FILTER_VALIDATE_URL)) {
+                        // 有媒体URL的情况
+                        $path = parse_url($response_config['url'], PHP_URL_PATH);
+                        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+                        
+                        if (in_array($extension, ['mp4', 'mov'])) {
+                            sendTelegramVideo($chat_id, $response_config['url'], $response_config['text'], $response_config['markup'], 'HTML');
+                        } else {
+                            sendTelegramPhoto($chat_id, $response_config['url'], $response_config['text'], $response_config['markup'], 'HTML');
+                        }
+                    } else {
+                        // 纯文本或仅按钮
+                        sendTelegramMessage($chat_id, $response_config['text'], 'HTML', $response_config['markup']);
+                    }
                     break; 
                 }
             }
