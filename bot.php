@@ -2253,6 +2253,7 @@ return;
                 ]);
             }
             $conn->close();
+            break;
             case 'delete':
                 $confirm_keyboard = [
                     [
