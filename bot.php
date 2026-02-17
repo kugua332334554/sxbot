@@ -21,7 +21,6 @@ define('COPY_SOURCE_DIR', __DIR__ . '/copy/');
 define('CONFIG_FILE', __DIR__ . '/你的目录/config.txt');
 require_once __DIR__ . '/OkayPay.php';
 
-
 // 建立数据库连接。
 function connectDB() {
     $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
@@ -119,6 +118,7 @@ function createNewBotTable($newTableName, $adminUserId) {
         return false;
     }
 }
+
 // 转义
 function escapeMarkdownV2($text) {
     $replacements = [
@@ -130,6 +130,7 @@ function escapeMarkdownV2($text) {
     ];
     return strtr($text, $replacements);
 }
+
 // 获取管理员
 function getAdmins() {
     $conn = connectDB();
@@ -187,10 +188,8 @@ function getStatistics() {
     // 获取总用户数
     $result_users = $conn->query("SELECT COUNT(*) FROM user");
     $total_users = $result_users ? $result_users->fetch_row()[0] : 0;
-    // 获取管理员数量
     $result_admins = $conn->query("SELECT COUNT(*) FROM user WHERE identity = 'admin'");
-    $total_admins = $result_admins ? $result_admins->fetch_row()[0] : 0;
-    // 获取 Bot 数量
+    $total_admins = $result_admins ? $result_admins->fetch_row()[0] : 0;// 获取 Bot 数量
     $result_bots = $conn->query("SELECT COUNT(*) FROM token");
     $total_bots = $result_bots ? $result_bots->fetch_row()[0] : 0;
     $conn->close();
@@ -206,7 +205,6 @@ function getStatistics() {
 function isTokenExists($token) {
     $conn = connectDB();
     if (!$conn) {
-        // 如果数据库连接失败，记录错误日志
         error_log("Database connection failed for isTokenExists check.");
         return false;
     }
@@ -228,7 +226,7 @@ function isTokenExists($token) {
     return $count > 0;
 }
 
-// 设置用户的身份identity
+// 设置用户的identity
 function setAdminIdentity($user_id, $identity) {
     $conn = connectDB();
     if (!$conn) {
@@ -238,7 +236,6 @@ function setAdminIdentity($user_id, $identity) {
     if (!in_array($identity, ['user', 'admin'])) {
         return false;
     }
-    
     // 检查用户是否存在
     $stmt_check = $conn->prepare("SELECT COUNT(*) FROM user WHERE user_id = ?");
     $stmt_check->bind_param("i", $user_id);
@@ -252,7 +249,6 @@ function setAdminIdentity($user_id, $identity) {
         $conn->close();
         return false; 
     }
-
     // 更新身份
     $stmt = $conn->prepare("UPDATE user SET identity = ? WHERE user_id = ?");
     $stmt->bind_param("si", $identity, $user_id);
@@ -291,6 +287,7 @@ function getBotsByOwnerId($owner_id) {
     $conn->close();
     return $bots;
 }
+
 // 发送/编辑用户的机器人列表菜单。
 function sendMyBotsMenu($chat_id, $user_id, $message_id = null) {
     // 获取用户拥有的所有机器人
@@ -399,6 +396,7 @@ function setNewBotWebhookForClonedBot($new_bot_token, $new_bot_username) {
 
     return $result;
 }
+
 // 检查用户是否存在于数据库中，如果不存在则插入记录，并返回用户的当前操作习惯。
 function ensureUserExistsAndGetMode($user_id, $username) {
     $conn = connectDB();
@@ -487,7 +485,7 @@ function getUserIdentity($user_id) {
     return 'none';
 }
 
-// 获取用户的当前输入状态 (sta)。
+// 获取用户的当前输入状态。
 function getUserState($user_id) {
     $conn = connectDB();
     if (!$conn) {
@@ -650,7 +648,7 @@ function sendAdminBotManagementMenu($chat_id, $message_id = null, $page = 1, $se
     if ($current_page < $total_pages) {
         $next_page = $current_page + 1;
         $pagination_row[] = [
-            'text' => '下一页', 
+            'text' => '下一页 ➡️', 
             'callback_data' => "admin_bot_page:{$next_page}{$search_suffix}",
             'icon_custom_emoji_id' => '5875506366050734240' 
         ];
@@ -707,6 +705,59 @@ function sendAdminBotManagementMenu($chat_id, $message_id = null, $page = 1, $se
     } else {
         sendTelegramApi('sendMessage', $params);
     }
+}
+
+// 将 Telegram 消息转换为 HTML 字符串
+function getHtmlFromMessage($update) {
+    $message = $update['message'] ?? [];
+    $text = $message['text'] ?? '';
+    $entities = $message['entities'] ?? [];
+    if (empty($entities)) return htmlspecialchars($text);
+
+    // 将字符串转换为 UTF-16 数组，以匹配 Telegram 的偏移量计算方式
+    $utf16_text = mb_convert_encoding($text, 'UTF-16', 'UTF-8');
+    
+    // 从后往前处理实体，避免插入 HTML 标签后影响前面的偏移量
+    usort($entities, function($a, $b) {
+        return $b['offset'] - $a['offset'];
+    });
+
+    foreach ($entities as $entity) {
+        $type = $entity['type'];
+        $offset = $entity['offset'];
+        $length = $entity['length'];
+
+        // 使用截取 UTF-16 的方式获取子字符串，再转回 UTF-8
+        $sub_text_utf16 = substr($utf16_text, $offset * 2, $length * 2);
+        $sub_text = mb_convert_encoding($sub_text_utf16, 'UTF-8', 'UTF-16');
+        
+        $replacement = '';
+        switch ($type) {
+            case 'custom_emoji':
+                $emoji_id = $entity['custom_emoji_id'];
+                $replacement = "<tg-emoji emoji-id=\"$emoji_id\">$sub_text</tg-emoji>";
+                break;
+            case 'bold':
+                $replacement = "<b>$sub_text</b>";
+                break;
+            case 'italic':
+                $replacement = "<i>$sub_text</i>";
+                break;
+            case 'text_link':
+                $url = $entity['url'];
+                $replacement = "<a href=\"$url\">$sub_text</a>";
+                break;
+            default:
+                $replacement = $sub_text;
+                break;
+        }
+        $before = mb_convert_encoding(substr($utf16_text, 0, $offset * 2), 'UTF-8', 'UTF-16');
+        $after = mb_convert_encoding(substr($utf16_text, ($offset + $length) * 2), 'UTF-8', 'UTF-16');
+        $text = $before . $replacement . $after;
+        $utf16_text = mb_convert_encoding($text, 'UTF-16', 'UTF-8');
+    }
+
+    return $text;
 }
 
 // 将消息中的会员表情转换为 HTML 格式，并处理 HTML 转义
@@ -797,7 +848,7 @@ function recordBotToken($owner_id, $token, $bot_username, $secret_token) {
     $conn->close();
     return $result;
 }
-// 更新 config.txt 文件中的配置项。
+// 更新 config 文件中的配置项。
 function updateConfigFile($key, $value) {
     $file_path = CONFIG_FILE;
     // 检查文件是否存在且可写
@@ -833,7 +884,6 @@ function updateConfigFile($key, $value) {
         // 在文件末尾添加一个空行和新的键值对
         $new_lines[] = "\n" . $key . '=' . $value;
     }
-
     // 将新内容写回文件
     $result = file_put_contents($file_path, implode("\n", $new_lines));
     return $result !== false;
@@ -864,66 +914,44 @@ function getBotInfoByUsername($username) {
     return $bot_info;
 }
 
-
 // 发送续费/升级机器人选择菜单。
 function sendUpgradeSelectionMenu($chat_id, $user_id, $message_id = null) {
     $bots = getBotsByOwnerId($user_id);
-    $message = "<b><tg-emoji emoji-id=\"5956561749070057536\">⭐</tg-emoji> 续费/升级</b>\n\n请选择您想升级的机器人：";
     $keyboard = [];
+    $message = empty($bots) 
+        ? "<b><tg-emoji emoji-id=\"5879785854284599288\">ℹ️</tg-emoji> 您没有任何机器人可供升级。请先创建机器人。</b>" 
+        : "<b><tg-emoji emoji-id=\"5956561749070057536\">⭐</tg-emoji> 续费/升级</b>\n\n请选择您想升级的机器人：";
 
-    if (empty($bots)) {
-        $message = "<b><tg-emoji emoji-id=\"5879785854284599288\">ℹ️</tg-emoji> 您没有任何机器人可供升级。请先创建机器人。</b>";
-    } else {
-        foreach ($bots as $bot) {
-            $bot_info = getBotInfoByUsername($bot['bot_username']);
-            $cost_status = $bot_info['cost'] ?? 'free';
-            $bot_display = "@{$bot['bot_username']} - " . ($cost_status === 'pay' ? '付费版' : '免费版');
-            
-            $action_button = [];
-            if ($cost_status === 'free') {
-                $action_button = [
-                    'text' => '去解锁高级版', 
-                    'callback_data' => "do_upgrade:{$bot['bot_username']}",
-                    'icon_custom_emoji_id' => '6019523512908124649' 
-                ];
-            } else {
-                $action_button = [
-                    'text' => '已解锁', 
-                    'url' => "https://t.me/{$bot['bot_username']}",
-                    'icon_custom_emoji_id' => '6034962180875490251' 
-                ];
-            }
-            
-            $keyboard[] = [
-                ['text' => $bot_display, 'callback_data' => 'noop'],
-                $action_button
-            ];
-        }
+    foreach ($bots as $bot) {
+        $info = getBotInfoByUsername($bot['bot_username']);
+        $isFree = ($info['cost'] ?? 'free') === 'free';
+        
+        $keyboard[] = [
+            ['text' => "@{$bot['bot_username']} - " . ($isFree ? '免费版' : '付费版'), 'callback_data' => 'noop'],
+            $isFree ? [
+                'text' => '去解锁高级版', 
+                'callback_data' => "do_upgrade:{$bot['bot_username']}",
+                'icon_custom_emoji_id' => '6019523512908124649'
+            ] : [
+                'text' => '已解锁', 
+                'url' => "https://t.me/{$bot['bot_username']}",
+                'icon_custom_emoji_id' => '6034962180875490251'
+            ]
+        ];
     }
-    
-    // 返回主菜单按钮
-    $keyboard[] = [
-        [
-            'text' => '返回主菜单', 
-            'callback_data' => 'main_menu_back',
-            'icon_custom_emoji_id' => '6008258140108231117' 
-        ]
-    ];
-
+    $keyboard[] = [['text' => '返回主菜单', 'callback_data' => 'main_menu_back', 'icon_custom_emoji_id' => '6008258140108231117']];
     $params = [
-        'chat_id' => $chat_id, 
-        'text' => $message, 
-        'reply_markup' => json_encode(['inline_keyboard' => $keyboard]), 
-        'parse_mode' => 'HTML', 
+        'chat_id' => $chat_id,
+        'text' => $message,
+        'reply_markup' => json_encode(['inline_keyboard' => $keyboard]),
+        'parse_mode' => 'HTML',
         'disable_web_page_preview' => true
     ];
-    
     if ($message_id) {
         $params['message_id'] = $message_id;
-        sendTelegramApi('editMessageText', $params);
-    } else {
-        sendTelegramApi('sendMessage', $params);
+        return sendTelegramApi('editMessageText', $params);
     }
+    return sendTelegramApi('sendMessage', $params);
 }
 
 // 发送/编辑特定机器人的设置菜单。
@@ -1028,7 +1056,6 @@ function sendTelegramApi($method, $params) {
         error_log("cURL Error: " . $error);
         return null;
     }
-    
     return json_decode($response, true);
 }
 
@@ -1257,7 +1284,13 @@ function sendUserProfileMenu($chat_id, $user_id, $message_id = null) {
 
 // 生成管理员专属面板的消息文本和内联键盘。
 function getAdminPanelMarkupAndText() {
-    // 定义图标 ID 映射
+    $btns = [
+        ['config', '管理配置项', 'admin_manage_configs'],
+        ['user',   '用户管理',   'admin_user_management'],
+        ['bot',    'Bot 管理',   'admin_bot_management'],
+        ['stats',  '统计信息',   'admin_stats']
+    ];
+
     $icons = [
         'config' => '5877260593903177342',
         'user'   => '5942877472163892475',
@@ -1265,61 +1298,32 @@ function getAdminPanelMarkupAndText() {
         'stats'  => '5931472654660800739'
     ];
 
-    // 准备带有自定义图标的管理面板键盘
-    $admin_keyboard = [
-        [[
-            'text' => '管理配置项', 
-            'callback_data' => 'admin_manage_configs',
-            'icon_custom_emoji_id' => $icons['config']
-        ]],
-        [[
-            'text' => '用户管理', 
-            'callback_data' => 'admin_user_management',
-            'icon_custom_emoji_id' => $icons['user']
-        ]], 
-        [[
-            'text' => 'Bot 管理', 
-            'callback_data' => 'admin_bot_management',
-            'icon_custom_emoji_id' => $icons['bot']
-        ]], 
-        [[
-            'text' => '统计信息', 
-            'callback_data' => 'admin_stats',
-            'icon_custom_emoji_id' => $icons['stats']
-        ]],
-    ];
-
-    $reply_markup = [
-        'inline_keyboard' => $admin_keyboard
-    ];
-    
-    $text = "<b><tg-emoji emoji-id=\"5877260593903177342\">⚙️</tg-emoji>  管理员控制台</b>\n\n<tg-emoji emoji-id=\"5883997877172179131\">🖋</tg-emoji> 尊敬的管理员，这是管理面板。请选择需要操作的项目：";
+    $keyboard = array_map(fn($b) => [[
+        'text' => $b[1],
+        'callback_data' => $b[2],
+        'icon_custom_emoji_id' => $icons[$b[0]]
+    ]], $btns);
 
     return [
-        'text' => $text,
-        'reply_markup' => json_encode($reply_markup)
+        'text' => "<b><tg-emoji emoji-id=\"{$icons['config']}\">⚙️</tg-emoji>  管理员控制台</b>\n\n<tg-emoji emoji-id=\"5883997877172179131\">🖋</tg-emoji> 尊敬的管理员，这是管理面板。请选择需要操作的项目：",
+        'reply_markup' => json_encode(['inline_keyboard' => $keyboard])
     ];
 }
 
 // 发送管理员专属面板和信息。
 function sendAdminPanel($chat_id) {
-    // 发送第一条确认消息：用户将看到的消息已发送
     sendTelegramApi('sendMessage', [
         'chat_id' => $chat_id,
         'text' => '<tg-emoji emoji-id="5875078273775439450">🔼</tg-emoji> 这是用户将看到的消息。',
         'parse_mode' => 'HTML'
     ]);
-
-    // 发送第二条分隔消息：管理员可见的提示
     sendTelegramApi('sendMessage', [
         'chat_id' => $chat_id,
         'text' => '<tg-emoji emoji-id="5875008416132370818">🔽</tg-emoji> 本信息仅管理员可见。',
         'parse_mode' => 'HTML'
     ]);
-
     // 获取管理面板内容
     $panel_content = getAdminPanelMarkupAndText();
-
     // 发送管理面板
     sendTelegramApi('sendMessage', [
         'chat_id' => $chat_id,
@@ -1359,7 +1363,7 @@ function sendAdminConfigSubMenu($chat_id, $message_id) {
     $config_message = "<b><tg-emoji emoji-id=\"5875033614705495771\">🎛</tg-emoji> 当前配置值:</b>\n\n";
     $config_message .= "<tg-emoji emoji-id=\"5765071340847501478\">🔗</tg-emoji> 客服链接: <code>{$KEFUURL}</code>\n";
     $config_message .= "<tg-emoji emoji-id=\"5771695636411847302\">📢</tg-emoji> 教程频道: <code>{$JIAOCHENGPINDAO}</code>\n";
-    $config_message .= "<tg-emoji emoji-id=\"5778318458802409852\">💰</tg-emoji> 广告内容: <code>{$ads_content}</code>\n"; 
+    $config_message .= "<tg-emoji emoji-id=\"5778318458802409852\">💰</tg-emoji> 广告内容: {$ads_content}\n"; 
     $config_message .= "<tg-emoji emoji-id=\"5769403330761593044\">👛</tg-emoji> OKPAY Token: <code>{$OKPAYTOKEN}</code>\n";
     $config_message .= "<tg-emoji emoji-id=\"5769403330761593044\">👛</tg-emoji> OKPAY ID: <code>{$OKPAYID}</code>\n";
     $config_message .= "<tg-emoji emoji-id=\"5992430854909989581\">🪙</tg-emoji> 基础费用: <code>{$COST}</code>\n";
@@ -1398,34 +1402,18 @@ function sendAdminConfigSubMenu($chat_id, $message_id) {
 
 // 发送用户管理子菜单。
 function sendAdminUserManagementSubMenu($chat_id, $message_id) {
-    $message = "<tg-emoji emoji-id=\"5879770735999717115\">👤</tg-emoji> <b>用户管理</b>:\n\n请选择一个管理选项：";
     $keyboard = [
-        [
-            [
-                'text' => '管理员设置', 
-                'callback_data' => 'admin_settings',
-                'icon_custom_emoji_id' => '5807868868886009920'
-            ]
-        ],
-        [
-            [
-                'text' => '返回管理面板', 
-                'callback_data' => 'admin_panel_back',
-                'icon_custom_emoji_id' => '5877629862306385808'
-            ]
-        ],
+        [['text' => '管理员设置', 'callback_data' => 'admin_settings', 'icon_custom_emoji_id' => '5807868868886009920']],
+        [['text' => '返回管理面板', 'callback_data' => 'admin_panel_back', 'icon_custom_emoji_id' => '5877629862306385808']]
     ];
 
-    $reply_markup = ['inline_keyboard' => $keyboard];
-    $params = [
-        'chat_id' => $chat_id,
-        'text' => $message,
-        'reply_markup' => json_encode($reply_markup),
-        'parse_mode' => 'HTML'
-    ];
-    
-    $params['message_id'] = $message_id;
-    sendTelegramApi('editMessageText', $params);
+    sendTelegramApi('editMessageText', [
+        'chat_id'      => $chat_id,
+        'message_id'   => $message_id,
+        'text'         => "<tg-emoji emoji-id=\"5879770735999717115\">👤</tg-emoji> <b>用户管理</b>:\n\n请选择一个管理选项：",
+        'reply_markup' => json_encode(['inline_keyboard' => $keyboard]),
+        'parse_mode'   => 'HTML'
+    ]);
 }
 
 function writeLog($message, $level = 'INFO') {
@@ -1529,17 +1517,9 @@ function handleStartCommand($message) {
     $chat_id = $message['chat']['id'];
     $user_id = $message['from']['id'];
     $username = $message['from']['username'] ?? ''; 
-    
-    // 确保用户存在并获取其当前模式
     $current_mode = ensureUserExistsAndGetMode($user_id, $username);
-    
-    // 获取用户身份
     $identity = getUserIdentity($user_id);
-    
-    // 根据用户模式发送键盘
     sendWelcomeMessageAndKeyboard($chat_id, $current_mode);
-
-    // 如果是管理员，额外发送管理面板
     if ($identity === 'admin') {
         error_log("Admin user started: " . $user_id);
         sendAdminPanel($chat_id);
@@ -1551,16 +1531,11 @@ function handleModeCommand($message) {
     $chat_id = $message['chat']['id'];
     $user_id = $message['from']['id'];
     $username = $message['from']['username'] ?? ''; // 用户名可能为空
-    // 1. 获取当前模式
     $current_mode = ensureUserExistsAndGetMode($user_id, $username);
-    // 切换模式
     $new_mode = toggleUserMode($user_id, $current_mode);
-    // 准备确认消息
     $confirmation_message = ($new_mode === 'bottom_keyboard') ? '底部键盘已激活' : '内联键盘已激活';
-    // 发送确认消息和新模式的键盘
     sendWelcomeMessageAndKeyboard($chat_id, $new_mode, $confirmation_message);
 }
-
 
 // 接收 Telegram 更新数据
 $update = json_decode(file_get_contents('php://input'), true);
@@ -1645,7 +1620,7 @@ if ($identity === 'admin' && (strpos($text, '/gb ') === 0 || strpos($caption, '/
         
         $post_data = [
             'token' => BOT_TOKEN,
-            'text' => $broadcast_text, // 这里现在已经是处理好的 HTML 文本
+            'text' => $broadcast_text, 
             'photo' => $photo_file_id ?? '',
             'users' => json_encode($all_users),
             'admin_id' => $chat_id,
@@ -1884,29 +1859,29 @@ return;
         if ($admin_operation) {
             // 避免管理员删除自己的权限
             if ($admin_operation === 'user' && $admin_target_id == $user_id) {
-                $response_text = "❌ 您不能在这里删除您自己的管理员权限。";
+                $response_text = "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 您不能在这里删除您自己的管理员权限。";
                 setUserState($user_id, 'none');
             } elseif (setAdminIdentity($admin_target_id, $admin_operation)) {
-                $response_text = "✅ 成功{$operation_type}用户 `{$admin_target_id}` 的管理员权限。";
+                $response_text = "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 成功{$operation_type}用户 <code>{$admin_target_id}</code> 的管理员权限。";
                 setUserState($user_id, 'none');
             } else {
-                $response_text = "❌ {$operation_type}管理员权限失败。请确认目标用户 `{$admin_target_id}` 存在。";
+                $response_text = "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> {$operation_type}管理员权限失败。请确认目标用户 <code>{$admin_target_id}</code> 存在。";
                 // setUserState($user_id, 'none'); 
             }
             
             sendTelegramApi('sendMessage', [
                 'chat_id' => $chat_id,
                 'text' => $response_text,
-                'parse_mode' => 'Markdown'
+                'parse_mode' => 'HTML'
             ]);
             sendAdminSettingsMenu($chat_id, null); 
             return;
         } elseif (($current_state === 'waiting_for_admin_id_to_add' || $current_state === 'waiting_for_admin_id_to_remove') && $admin_target_id === null) {
-            $response_text = "⚠️ 输入无效。请发送一个 *数字* 用户ID。请重新尝试或发送 /start 取消操作。";
+            $response_text = "<tg-emoji emoji-id=\"5881702736843511327\">⚠️</tg-emoji> 输入无效。请发送一个 *数字* 用户ID。请重新尝试或发送 /start 取消操作。";
             sendTelegramApi('sendMessage', [
                 'chat_id' => $chat_id,
                 'text' => $response_text,
-                'parse_mode' => 'Markdown'
+                'parse_mode' => 'HTML'
             ]);
             setUserState($user_id, 'none');
             return;
@@ -1916,39 +1891,49 @@ return;
         if (strpos($current_state, 'waiting_for_') === 0 && !in_array($current_state, ['waiting_for_admin_id_to_add', 'waiting_for_admin_id_to_remove'])) {
     
     // 特殊处理广告文件内容
-       if ($current_state === 'waiting_for_ads_content') {
-        if (updateAdsFile($text)) {
-            $response_text = "✅ 广告文件内容已成功更新。";
+    if ($current_state === 'waiting_for_ads_content') {
+        $html_content = getHtmlFromMessage($update); 
+
+        if (updateAdsFile($html_content)) {
+            $response_text = "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 广告内容已成功更新。";
             setUserState($user_id, 'none');
             
             sendTelegramApi('sendMessage', [
-                'chat_id' => $chat_id,
-                'text' => $response_text,
-                'parse_mode' => 'Markdown'
+                'chat_id'    => $chat_id,
+                'text'       => $response_text,
+                'parse_mode' => 'HTML'
             ]);
             sendAdminConfigSubMenu($chat_id, null);
         } else {
-            $response_text = "❌ 广告文件更新失败。请检查文件权限。";
-            sendTelegramApi('sendMessage', ['chat_id' => $chat_id, 'text' => $response_text]);
+            $response_text = "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 广告文件更新失败。请检查文件权限。";
+            sendTelegramApi('sendMessage', [
+                'chat_id' => $chat_id, 
+                'text'    => $response_text,
+                'parse_mode' => 'HTML'
+            ]);
         }
         return;
     }
     $config_key = strtoupper(str_replace('waiting_for_', '', $current_state));
     
     if (updateConfigFile($config_key, $text)) {
-        $response_text = "✅ 配置项 `{$config_key}` 已成功更新为: `{$text}`。";
+        $response_text = "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 配置项 `{$config_key}` 已成功更新为: `{$text}`。";
         setUserState($user_id, 'none');
         
         sendTelegramApi('sendMessage', [
             'chat_id' => $chat_id,
             'text' => $response_text,
-            'parse_mode' => 'Markdown'
+            'parse_mode' => 'HTML'
         ]);
         sendAdminConfigSubMenu($chat_id, null);
 
     } else {
-        $response_text = "❌ 配置文件更新失败。请检查文件权限或配置项是否存在。";
-        sendTelegramApi('sendMessage', ['chat_id' => $chat_id, 'text' => $response_text]);
+        $response_text = "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 配置文件更新失败。请检查文件权限或配置项是否存在。";
+        sendTelegramApi('sendMessage', [
+            'chat_id' => $chat_id,
+            'text' => $response_text,
+            'parse_mode' => 'HTML'
+        ]);
     }
     return; 
 }
@@ -2253,7 +2238,6 @@ return;
                 ]);
             }
             $conn->close();
-            break;
             case 'delete':
                 $confirm_keyboard = [
                     [
