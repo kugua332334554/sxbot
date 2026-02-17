@@ -127,6 +127,35 @@ function updateOrAddKeyword($keyword, $field, $value) {
     return reconstructAndWriteGuanjianciFile($configs);
 }
 
+/**
+ * 将带有实体的文本转换为内部配置格式
+ */
+function convertEntitiesToConfigFormat($text, $entities) {
+    if (empty($entities)) return $text;
+
+    // 按偏移量从后往前排序，防止替换导致前面的偏移量失效
+    usort($entities, function($a, $b) {
+        return $b['offset'] - $a['offset'];
+    });
+    $utf16_text = mb_convert_encoding($text, 'UTF-16LE', 'UTF-8');
+
+    foreach ($entities as $entity) {
+        if ($entity['type'] === 'custom_emoji') {
+            $id = $entity['custom_emoji_id'];
+            $offset = $entity['offset'];
+            $length = $entity['length'];
+            // 构造替换内容
+            $replacement = mb_convert_encoding("{{$id}}", 'UTF-16LE', 'UTF-8');
+            $before = substr($utf16_text, 0, $offset * 2);
+            $after = substr($utf16_text, ($offset + $length) * 2);
+
+            $utf16_text = $before . $replacement . $after;
+        }
+    }
+
+    // 转回 UTF-8
+    return mb_convert_encoding($utf16_text, 'UTF-8', 'UTF-16LE');
+}
 
 function deleteKeyword($keyword_to_delete) {
     $configs = parseGuanjianciFile(true) ?? []; 
@@ -516,31 +545,54 @@ function fetchConfigValueFromFile($file_path, $key) {
 
 
 function formatTextWithEntities($text, $entities) {
-    if (empty($entities)) return htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+    if (empty($entities)) return $text;
 
-    // 将实体按偏移量从后往前排序，避免替换后索引错乱
+    // 将 UTF-8 转换为 UTF-16 数组，因为 Telegram 的 offset 是基于 UTF-16 的
+    $text_utf16 = mb_convert_encoding($text, 'UTF-16BE', 'UTF-8');
+    $result = '';
+    $last_offset = 0;
+
+    // 按偏移量排序实体（防止嵌套或无序）
     usort($entities, function($a, $b) {
-        return $b['offset'] - $a['offset'];
+        return $a['offset'] - $b['offset'];
     });
 
     foreach ($entities as $entity) {
-        if ($entity['type'] === 'custom_emoji') {
-            $offset = $entity['offset'];
-            $length = $entity['length'];
+        $offset = $entity['offset'];
+        $length = $entity['length'];
+        $type = $entity['type'];
+
+        // 提取实体之前的文本
+        $prev_part_utf16 = substr($text_utf16, $last_offset * 2, ($offset - $last_offset) * 2);
+        $result .= mb_convert_encoding($prev_part_utf16, 'UTF-8', 'UTF-16BE');
+
+        // 提取实体部分的文本
+        $entity_text_utf16 = substr($text_utf16, $offset * 2, $length * 2);
+        $entity_text = mb_convert_encoding($entity_text_utf16, 'UTF-8', 'UTF-16BE');
+
+        if ($type === 'custom_emoji') {
             $emoji_id = $entity['custom_emoji_id'];
-
-            // 提取表情符号
-            $emoji_char = mb_substr($text, $offset, $length, 'UTF-8');
-            // 生成 HTML 标签
-            $html_tag = "<tg-emoji emoji-id=\"$emoji_id\">$emoji_char</tg-emoji>";
-
-            // 替换原文本中的表情符号为标签
-            $text = mb_substr($text, 0, $offset, 'UTF-8') . $html_tag . mb_substr($text, $offset + $length, null, 'UTF-8');
+            $result .= '<tg-emoji emoji-id="' . $emoji_id . '">' . $entity_text . '</tg-emoji>';
+        } elseif ($type === 'bold') {
+            $result .= '<b>' . $entity_text . '</b>';
+        } elseif ($type === 'italic') {
+            $result .= '<i>' . $entity_text . '</i>';
+        } elseif ($type === 'text_link') {
+            $result .= '<a href="' . $entity['url'] . '">' . $entity_text . '</a>';
+        } else {
+            // 其他实体保持原样
+            $result .= $entity_text;
         }
-    }
-    return $text; // 注意：这里返回的是带 HTML 标签的文本
-}
 
+        $last_offset = $offset + $length;
+    }
+
+    // 加上剩余的文本
+    $rest_utf16 = substr($text_utf16, $last_offset * 2);
+    $result .= mb_convert_encoding($rest_utf16, 'UTF-8', 'UTF-16BE');
+
+    return $result;
+}
 /**
  *Readpet
  */
@@ -602,17 +654,19 @@ function parseAnnniuFile() {
 }
 
 function parseJianpanFile() {
-    if (!defined('JIANPAN') || !file_exists(JIANPAN)) return null;
-    
+    if (!defined('JIANPAN') || !file_exists(JIANPAN)) return null; 
     $content = file_get_contents(JIANPAN);
-    if ($content === false) return null;
-    
-    // 移除 UTF-8 BOM 头
-    if (substr($content, 0, 3) === "\xef\xbb\xbf") {
-        $content = substr($content, 3);
+    if ($content === false || empty(trim($content))) return null;
+    $decoded = json_decode($content, true);
+    if (is_array($decoded) && isset($decoded['keyboard'])) {
+        return $decoded;
     }
-    
-    $lines = explode("\n", $content);
+    return processRawKeyboardText($content);
+}
+
+// 将原始文本行解析为按钮数组结构
+function processRawKeyboardText($raw_text) {
+    $lines = explode("\n", $raw_text);
     $keyboard = [];
     $has_content = false;
 
@@ -627,24 +681,32 @@ function parseJianpanFile() {
         foreach ($buttons_text as $button_text) {
             $trimmed_text = trim($button_text);
             if (!empty($trimmed_text)) {
-                // 匹配模式：文字[颜色]
-                if (preg_match('/^(.*?)\[(.*?)\]$/', $trimmed_text, $matches)) {
-                    $text = trim($matches[1]);
-                    $color_input = trim($matches[2]);
-                    
-                    // 严格匹配您要求的 style 字段值
-                    $style_map = [
-                        '红色' => 'danger',
-                        'danger' => 'danger',
-                        '绿色' => 'success',
-                        'success' => 'success',
-                        '蓝色' => 'primary',
-                        'primary' => 'primary'
-                    ];
+                // 更新后的正则表达式：
+                // ^(?:\{(\d+)\})? -> 匹配开头的 {EmojiID}
+                // (.*?)           -> 匹配按钮文字 (必选)
+                // (?:\[([^\]]+)\])?$ -> 匹配结尾的 [颜色]
+                if (preg_match('/^(?:\{(\d+)\})?(.*?)(?:\[([^\]]+)\])?$/u', $trimmed_text, $matches)) {
+                    $emoji_id = !empty($matches[1]) ? $matches[1] : null;
+                    $text = trim($matches[2]);
+                    $color_input = !empty($matches[3]) ? trim($matches[3]) : null;
                     
                     $button_data = ['text' => $text];
-                    if (isset($style_map[$color_input])) {
-                        $button_data['style'] = $style_map[$color_input];
+                    
+                    // 注入自定义 Emoji ID
+                    if ($emoji_id) {
+                        $button_data['icon_custom_emoji_id'] = $emoji_id;
+                    }
+
+                    // 注入颜色样式
+                    if ($color_input) {
+                        $style_map = [
+                            '红色' => 'danger', 'danger' => 'danger',
+                            '绿色' => 'success', 'success' => 'success',
+                            '蓝色' => 'primary', 'primary' => 'primary'
+                        ];
+                        if (isset($style_map[$color_input])) {
+                            $button_data['style'] = $style_map[$color_input];
+                        }
                     }
                     $row[] = $button_data;
                 } else {
@@ -652,12 +714,9 @@ function parseJianpanFile() {
                 }
             }
         }
-        
-        if (!empty($row)) {
-            $keyboard[] = $row;
-        }
+        if (!empty($row)) $keyboard[] = $row;
     }
-    
+
     if (!$has_content || empty($keyboard)) return null;
 
     return [
@@ -668,9 +727,7 @@ function parseJianpanFile() {
     ];
 }
 
-/**
- * 解析关键词文件 (JSON 格式)
- */
+// 解析关键词文件
 function parseGuanjianciFile($return_raw_structure = false) {
     if (!defined('GUANJIANCI') || !file_exists(GUANJIANCI)) return null;
 
@@ -699,7 +756,7 @@ function parseGuanjianciFile($return_raw_structure = false) {
                 $row = [];
                 foreach ($buttons_text as $button_pair) {
                     if (strpos($button_pair, '+') !== false) {
-                        // 支持格式: [按钮名 + URL]
+                        // pd: [按钮名 + URL]
                         $clean_pair = trim($button_pair, " []");
                         list($btn_text, $btn_url) = explode('+', $clean_pair, 2);
                         $trimmed_text = trim($btn_text);
@@ -724,9 +781,7 @@ function parseGuanjianciFile($return_raw_structure = false) {
 }
 
 
-/**
- * 发送纯文本消息 (配套修改)
- */
+// 发送纯文本消息
 function sendTelegramMessage($chat_id, $text, $parse_mode = 'HTML', $reply_markup = null) {
     if (!defined('BOT_TOKEN')) return false;
 
@@ -746,9 +801,7 @@ function sendTelegramMessage($chat_id, $text, $parse_mode = 'HTML', $reply_marku
     return $result !== false;
 }
 
-/**
- * 编辑 Telegram 消息的文本和键盘。
- */
+// 编辑 Telegram 消息的文本和键盘。
 function editTelegramMessage($chat_id, $message_id, $text, $parse_mode = null, $reply_markup = null) {
     if (!defined('BOT_TOKEN')) return false;
 
@@ -767,10 +820,7 @@ function editTelegramMessage($chat_id, $message_id, $text, $parse_mode = null, $
     return $result !== false;
 }
 
-/**
- * 发送照片
- * 修改点：新增 $parse_mode 参数，默认为 'HTML'
- */
+// 发送照片
 function sendTelegramPhoto($chat_id, $photo_url, $caption = null, $reply_markup = null, $parse_mode = 'HTML') {
     if (!defined('BOT_TOKEN')) return false;
 
@@ -779,7 +829,7 @@ function sendTelegramPhoto($chat_id, $photo_url, $caption = null, $reply_markup 
         'chat_id' => $chat_id, 
         'photo' => $photo_url,
         'caption' => $caption,
-        'parse_mode' => $parse_mode, // 支持 HTML 标签
+        'parse_mode' => $parse_mode, 
         'reply_markup' => $reply_markup ? json_encode($reply_markup) : null
     ];
 
@@ -880,11 +930,12 @@ function replaceUserVariables($text, $user_info) {
     if (!$text || !$user_info || !is_array($user_info)) {
         return $text;
     }
-    
-    $username_display = isset($user_info['username']) ? "@" . $user_info['username'] : "Guest";
+    $username_display = isset($user_info['username']) ? htmlspecialchars("@" . $user_info['username'], ENT_QUOTES, 'UTF-8') : "Guest";
     $nickname_display = trim(($user_info['first_name'] ?? '') . " " . ($user_info['last_name'] ?? ''));
     if (empty($nickname_display)) {
         $nickname_display = "Guest";
+    } else {
+        $nickname_display = htmlspecialchars($nickname_display, ENT_QUOTES, 'UTF-8');
     }
 
     $replacements = [
@@ -913,13 +964,7 @@ function replaceKeywordVariables($text, $user_info) {
         '$userid' => $user_info['id'] ?? 'N/A',
         '$nickname' => $nickname_display,
     ];
-
-    // 先进行变量替换，然后再处理HTML标签
     $replaced_text = str_replace(array_keys($replacements), array_values($replacements), $text);
-    
-    // 确保tg-emoji标签格式正确（如果需要的话）
-    // 这里不做额外处理，保持原始格式
-    
     return $replaced_text;
 }
 
@@ -1008,7 +1053,7 @@ function sendResponse(
     $success = true;
 
     if ($reply_keyboard_markup !== null) {
-        sendTelegramMessage($chat_id, "键盘加载成功", 'HTML', $reply_keyboard_markup);
+        sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5877396173135811032\">⌨</tg-emoji>键盘加载成功", 'HTML', $reply_keyboard_markup);
     }
     if (!empty($media_url) && filter_var($media_url, FILTER_VALIDATE_URL)) {
         $path = parse_url($media_url, PHP_URL_PATH);
@@ -1225,47 +1270,101 @@ if ($callback_data === 'menu_main') {
     elseif ($callback_data === 'edit_start_text') {
         setUserState($conn, $admin_id, 'awaiting_start_text');
         $current_text = str_replace("\\n", "\n", getConfigValue('STARTMESSAGE') ?? '【空】');
-        $text = "当前的启动消息文本如下：\n\n`" . $current_text . "`\n\n现在请发送新的消息文本。\n支持变量: `{{username}}`, `{{userid}}`, `{{nickname}}`";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'menu_start_message']]]];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        $text = "<tg-emoji emoji-id=\"5994750571041525522\">📝</tg-emoji> <b>编辑启动消息文本</b>\n\n";
+        $text .= "当前文本内容：\n";
+        $text .= "<code>" . htmlspecialchars($current_text) . "</code>\n\n";
+        $text .= "现在请发送新的消息文本。您可以使用以下变量：\n";
+        $text .= "<code>{{username}}</code> - 用户名\n";
+        $text .= "<code>{{userid}}</code> - 用户 ID\n";
+        $text .= "<code>{{nickname}}</code> - 昵称\n\n";
+        $text .= "直接发送新文本即可，系统将自动保留您的 Emoji 和会员表情。";
+        
+        $markup = [
+            'inline_keyboard' => [[
+                [
+                    'text' => '🔙 取消', 
+                    'callback_data' => 'menu_start_message',
+                    'icon_custom_emoji_id' => '5877629862306385808'
+                ]
+            ]]
+        ];
+        
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
     elseif ($callback_data === 'edit_start_buttons') {
         setUserState($conn, $admin_id, 'awaiting_start_buttons');
         $current_buttons = file_exists(ANNIU) ? file_get_contents(ANNIU) : '【空】';
-        $text = "当前的内联按钮配置如下:\n格式: `[按钮名+链接] [另一按钮+链接]`\n\n`" . $current_buttons . "`\n\n现在请发送新的按钮配置。\n发送 none 清除按钮配置。";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'menu_start_message']]]];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        $text = "<tg-emoji emoji-id=\"6008258140108231117\">🔘</tg-emoji> <b>启动按钮管理</b>\n\n";
+        $text .= "当前的内联按钮配置如下：\n";
+        $text .= "<code>" . htmlspecialchars($current_buttons) . "</code>\n\n";
+        $text .= "请发送新的配置。\n";
+        $text .= "格式示例：<code>[按钮名+链接] | [另一按钮+链接]</code>\n\n";
+        $text .= "发送 <code>none</code> 可清除按钮配置。";
+        
+        $markup = [
+            'inline_keyboard' => [[
+                [
+                    'text' => '取消', 
+                    'callback_data' => 'menu_start_message',
+                    'icon_custom_emoji_id' => '5877629862306385808'
+                ]
+            ]]
+        ];
+        
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
 
     elseif ($callback_data === 'menu_start_media') {
         setUserState($conn, $admin_id, 'awaiting_start_media');
         $current_media = getConfigValue('STARTIMG') ?? 'none';
-        $text = "📷 **启动媒体管理**\n\n当前的媒体URL为: `" . $current_media . "`\n\n现在请发送新的图片或视频URL。发送 `none` 或空消息可清除媒体\n访问 https://a9a25fe3.telegraph-image-cp8.pages.dev 并上传图片获得链接。";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]]];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
-    }
-    
-    elseif ($callback_data === 'menu_keyboard') {
-        setUserState($conn, $admin_id, 'awaiting_keyboard');
-        $current_keyboard = file_exists(JIANPAN) ? file_get_contents(JIANPAN) : '【空】';
         
+        // 使用 HTML 格式
+        $text = "<tg-emoji emoji-id=\"5775949822993371030\">📷</tg-emoji> <b>启动媒体管理</b>\n\n";
+        $text .= "当前媒体 URL: <code>" . htmlspecialchars($current_media) . "</code>\n\n";
+        $text .= "现在请发送新的图片或视频 URL。\n";
+        $text .= "您可以访问 <a href=\"https://a9a25fe3.telegraph-image-cp8.pages.dev\">Telegraph Image</a> 上传图片获取链接。\n\n";
+        $text .= "发送 <code>none</code> 可清除当前媒体。";
+        
+        $markup = [
+            'inline_keyboard' => [[
+                [
+                    'text' => '返回主菜单', 
+                    'callback_data' => 'menu_main',
+                    'icon_custom_emoji_id' => '5877629862306385808'
+                ]
+            ]]
+        ];
+        
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
+    }elseif ($callback_data === 'menu_keyboard') {
+        setUserState($conn, $admin_id, 'awaiting_keyboard');
+        $current_content = file_exists(JIANPAN) ? file_get_contents(JIANPAN) : '';
+        $decoded = json_decode($current_content, true);
+        $raw_text = (is_array($decoded) && isset($decoded['raw_text'])) ? $decoded['raw_text'] : $current_content;
+        if (empty($raw_text)) $raw_text = '【空】';
+        $preview_html = htmlspecialchars($raw_text);
+        $preview_html = preg_replace(
+            '/\{(\d+)\}/', 
+            '<tg-emoji emoji-id="$1">🔹</tg-emoji>', 
+            $preview_html
+        );
 
-        $text = "<tg-emoji emoji-id=\"5877629862306385808\">🔘</tg-emoji> <b>底部按钮管理</b>\n\n" .
-                "<tg-emoji emoji-id=\"5935815201604507257\">🔘</tg-emoji>当前的底部按钮配置如下:\n" .
-                "基础格式: <code>按钮1 | 按钮2</code>\n" .
-                "颜色格式: <code>按钮1[蓝色] | 按钮2[红色]</code>\n" .
-                "支持颜色: 蓝色、红色、绿色、橙色\n\n" .
-                "当前配置:\n<code>" . $current_keyboard . "</code>\n\n" .
-                "<tg-emoji emoji-id=\"5886455371559604605\">➡️</tg-emoji>现在请发送新的底部按钮配置。\n\n" .
-                "<tg-emoji emoji-id=\"6007942490076745785\">🧹</tg-emoji>发送 <code>none</code> 即可清除键盘。";
-                
+        $text = "<tg-emoji emoji-id=\"6008258140108231117\">🔘</tg-emoji> <b>底部按钮管理</b>\n\n" .
+                "当前配置预览：\n" . $preview_html . "\n\n" .
+                "👇🏻 <b>编辑说明</b>：\n" .
+                "请直接发送按钮排版，<b>直接使用表情符号</b>即可。\n" .
+                "格式示例：\n" .
+                "<code>👋会员中心[蓝色] | ⚙️帮助[红色]</code>\n" .
+                "每一行代表一排按钮，使用 | 分隔。";
+            
         $markup = ['inline_keyboard' => [[['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]]];
         editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
 
     elseif ($callback_data === 'menu_keywords_list' || strpos($callback_data, 'keyword_back_list') === 0) {
         $keywords = parseGuanjianciFile(true);
-        $text = "🤖 **关键词回复管理**\n\n请选择要编辑的关键词，或添加新关键词。";
+        $text = "<tg-emoji emoji-id=\"6005570495603282482\">🔑</tg-emoji> <b>关键词回复管理</b>\n\n请选择要编辑的关键词，或添加新关键词。";
+        
         $keyboard = [];
         if (!empty($keywords)) {
             foreach ($keywords as $kw) {
@@ -1273,11 +1372,24 @@ if ($callback_data === 'menu_main') {
                 $keyboard[] = [['text' => $kw['word'], 'callback_data' => 'keyword_edit_' . $callback_kw]];
             }
         }
-        $keyboard[] = [['text' => '➕ 添加新关键词', 'callback_data' => 'keyword_add']];
-        $keyboard[] = [['text' => '🗑️ 清理并重置 JSON 格式', 'callback_data' => 'admin_clear_keywords']];
-        $keyboard[] = [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']];
+        $keyboard[] = [[
+            'text' => '添加新关键词', 
+            'callback_data' => 'keyword_add',
+            'icon_custom_emoji_id' => '5775937998948404844'
+        ]];
+        $keyboard[] = [[
+            'text' => '清理并重置 JSON 格式', 
+            'callback_data' => 'admin_clear_keywords',
+            'icon_custom_emoji_id' => '5879896690210639947'
+        ]];
+        $keyboard[] = [[
+            'text' => '返回主菜单', 
+            'callback_data' => 'menu_main',
+            'icon_custom_emoji_id' => '5877629862306385808'
+        ]];
+        
         $markup = ['inline_keyboard' => $keyboard];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
     elseif (strpos($callback_data, 'keyword_edit_') === 0) {
         $encoded_kw = substr($callback_data, strlen('keyword_edit_'));
@@ -1293,28 +1405,55 @@ if ($callback_data === 'menu_main') {
         }
 
         if ($config) {
-            $text = "正在编辑关键词: `".escapeMarkdown($keyword_word)."`\n\n" .
-                    "回复文本: `".escapeMarkdown($config['text'] ?? '【未设置】')."`\n" .
-                    "媒体URL: `".escapeMarkdown($config['url'] ?? '【未设置】')."`\n" .
-                    "按钮: `".escapeMarkdown(implode("\n", $config['buttons_raw'] ?? []) ?: '【未设置】')."`";
+            $text = "<tg-emoji emoji-id=\"6005570495603282482\">🔑</tg-emoji> <b>编辑关键词</b>\n\n" .
+                    "目标词: <code>" . htmlspecialchars($keyword_word) . "</code>\n\n" .
+                    "<tg-emoji emoji-id=\"6008090211181923982\">💬</tg-emoji> <b>回复文本:</b>\n<code>" . htmlspecialchars($config['text'] ?? '【未设置】') . "</code>\n\n" .
+                    "<tg-emoji emoji-id=\"5778586619380503542\">🖼️</tg-emoji> <b>媒体URL:</b>\n<code>" . htmlspecialchars($config['url'] ?? '【未设置】') . "</code>\n\n" .
+                    "<tg-emoji emoji-id=\"6008258140108231117\">🔗</tg-emoji> <b>按钮配置:</b>\n<code>" . htmlspecialchars(implode("\n", $config['buttons_raw'] ?? []) ?: '【未设置】') . "</code>";
             
-                $markup = [
+            $markup = [
                 'inline_keyboard' => [
                     [
-                        ['text' => '✍️ 文本', 'callback_data' => 'keyword_set_text_' . $encoded_kw],
-                        ['text' => '🖼️ 媒体', 'callback_data' => 'keyword_set_url_' . $encoded_kw]
+                        [
+                            'text' => '✍️ 文本', 
+                            'callback_data' => 'keyword_set_text_' . $encoded_kw,
+                            'icon_custom_emoji_id' => '6008090211181923982'
+                        ],
+                        [
+                            'text' => '🖼️ 媒体', 
+                            'callback_data' => 'keyword_set_url_' . $encoded_kw,
+                            'icon_custom_emoji_id' => '5778586619380503542'
+                        ]
                     ],
                     [
-                        ['text' => '🔗 按钮', 'callback_data' => 'keyword_set_buttons_' . $encoded_kw],
-                        ['text' => '👀 预览回复', 'callback_data' => 'keyword_preview_' . $encoded_kw] // 新增的按钮
+                        [
+                            'text' => '🔗 按钮', 
+                            'callback_data' => 'keyword_set_buttons_' . $encoded_kw,
+                            'icon_custom_emoji_id' => '6008258140108231117'
+                        ],
+                        [
+                            'text' => '👀 预览回复', 
+                            'callback_data' => 'keyword_preview_' . $encoded_kw,
+                            'icon_custom_emoji_id' => '5775949822993371030'
+                        ] 
                     ],
                     [
-                        ['text' => '🗑️ 删除', 'callback_data' => 'keyword_delete_' . $encoded_kw]
+                        [
+                            'text' => '🗑️ 删除', 
+                            'callback_data' => 'keyword_delete_' . $encoded_kw,
+                            'icon_custom_emoji_id' => '5879896690210639947'
+                        ]
                     ],
-                    [['text' => '🔙 返回列表', 'callback_data' => 'menu_keywords_list']]
+                    [
+                        [
+                            'text' => '🔙 返回列表', 
+                            'callback_data' => 'menu_keywords_list',
+                            'icon_custom_emoji_id' => '5877629862306385808'
+                        ]
+                    ]
                 ]
             ];
-            editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+            editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
         }
     }
 
@@ -1357,12 +1496,8 @@ if ($callback_data === 'menu_main') {
                  }
                  if (!empty($inline_keyboard)) $reply_markup = ['inline_keyboard' => $inline_keyboard];
             }
-
-            // 替换变量
             $admin_info = ['id' => $admin_id, 'username' => $update['callback_query']['from']['username'] ?? 'Admin', 'first_name' => 'Admin', 'last_name' => 'Preview'];
             $reply_text = replaceKeywordVariables($reply_text, $admin_info);
-
-            // 直接发送，不进行额外的HTML转义
             sendTelegramMessage($admin_id, $reply_text, 'HTML', $reply_markup);
             answerCallbackQuery($callback_query_id, "已发送预览回复（支持HTML标签）");
         } else {
@@ -1372,153 +1507,296 @@ if ($callback_data === 'menu_main') {
 
     elseif (strpos($callback_data, 'keyword_set_text_') === 0) {
         $encoded_kw = substr($callback_data, strlen('keyword_set_text_'));
+        $keyword_name = base64_decode($encoded_kw);
         setUserState($conn, $admin_id, 'awaiting_keyword_text_' . $encoded_kw);
-        $text = "请为关键词 `".escapeMarkdown(base64_decode($encoded_kw))."` 发送新的回复文本。\n支持变量: `$ username`, `$ userid`, `$ nickname` 去空格使用";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'keyword_edit_' . $encoded_kw]]]];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        $text = "<tg-emoji emoji-id=\"5877468380125990242\">💬</tg-emoji> <b>配置关键词回复文本</b>\n\n";
+        $text .= "正在为 <code>" . htmlspecialchars($keyword_name) . "</code> 设置回复内容。\n\n";
+        $text .= "请发送新的文本内容。您可以使用以下变量：\n";
+        $text .= "<code>\$username</code> - 用户名\n";
+        $text .= "<code>\$userid</code> - 用户 ID\n";
+        $text .= "<code>\$nickname</code> - 昵称\n\n";
+        $text .= "直接发送新文本即可，支持 Telegram 默认的加粗、链接等格式。";
+        
+        $markup = [
+            'inline_keyboard' => [[
+                [
+                    'text' => '取消', 
+                    'callback_data' => 'keyword_edit_' . $encoded_kw,
+                    'icon_custom_emoji_id' => '5877629862306385808'
+                ]
+            ]]
+        ];
+        
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
     elseif (strpos($callback_data, 'keyword_set_url_') === 0) {
         $encoded_kw = substr($callback_data, strlen('keyword_set_url_'));
+        $keyword_name = base64_decode($encoded_kw);
         setUserState($conn, $admin_id, 'awaiting_keyword_url_' . $encoded_kw);
-        $text = "请为关键词 `".escapeMarkdown(base64_decode($encoded_kw))."` 发送新的媒体URL。\n访问 https://a9a25fe3.telegraph-image-cp8.pages.dev 并上传图片获得链接 \n发送 `none` 清除。";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'keyword_edit_' . $encoded_kw]]]];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        $text = "<tg-emoji emoji-id=\"5775949822993371030\">🖼</tg-emoji> <b>配置关键词媒体</b>\n\n";
+        $text .= "正在为 <code>" . htmlspecialchars($keyword_name) . "</code> 设置媒体链接。\n\n";
+        $text .= "请发送新的媒体 URL。\n";
+        $text .= "您可以访问 <a href=\"https://a9a25fe3.telegraph-image-cp8.pages.dev\">Telegraph Image</a> 上传图片获取链接。\n\n";
+        $text .= "发送 <code>none</code> 可清除已有媒体。";
+        
+        $markup = [
+            'inline_keyboard' => [[
+                [
+                    'text' => '取消', 
+                    'callback_data' => 'keyword_edit_' . $encoded_kw,
+                    'icon_custom_emoji_id' => '5877629862306385808'
+                ]
+            ]]
+        ];
+        
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
-     elseif (strpos($callback_data, 'keyword_set_buttons_') === 0) {
+    elseif (strpos($callback_data, 'keyword_set_buttons_') === 0) {
         $encoded_kw = substr($callback_data, strlen('keyword_set_buttons_'));
+        $keyword_name = base64_decode($encoded_kw);
         setUserState($conn, $admin_id, 'awaiting_keyword_buttons_' . $encoded_kw);
-        $text = "请为关键词 `".escapeMarkdown(base64_decode($encoded_kw))."` 发送新的按钮配置 (格式: `按钮名-链接|另一按钮-链接`)。发送 `none` 清除。";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'keyword_edit_' . $encoded_kw]]]];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        $text = "<tg-emoji emoji-id=\"6005570495603282482\">🔑</tg-emoji> <b>配置关键词按钮</b>\n\n";
+        $text .= "正在为 <code>" . htmlspecialchars($keyword_name) . "</code> 设置按钮。\n\n";
+        $text .= "请发送配置 (格式: <code>按钮名-链接|另一按钮-链接</code>)。\n\n";
+        $text .= "发送 <code>none</code> 可清除已有按钮。";
+        
+        $markup = [
+            'inline_keyboard' => [[
+                [
+                    'text' => '取消', 
+                    'callback_data' => 'keyword_edit_' . $encoded_kw,
+                    'icon_custom_emoji_id' => '5877629862306385808'
+                ]
+            ]]
+        ];
+        
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
     elseif (strpos($callback_data, 'keyword_delete_') === 0) {
         $encoded_kw = substr($callback_data, strlen('keyword_delete_'));
         $keyword_word = base64_decode($encoded_kw);
         deleteKeyword($keyword_word);
+        
+        // 弹窗提示
         answerCallbackQuery($callback_query_id, "关键词 '{$keyword_word}' 已删除", true);
-        // Refresh the list
+        
+        // 刷新列表
         $keywords = parseGuanjianciFile(true);
-        $text = "✅ 关键词已删除。这是更新后的列表:";
+        $text = "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> <b>关键词已删除</b>\n\n这是更新后的列表：";
+        
         $keyboard = [];
         if (!empty($keywords)) {
             foreach ($keywords as $kw) {
                 $keyboard[] = [['text' => $kw['word'], 'callback_data' => 'keyword_edit_' . base64_encode($kw['word'])]];
             }
         }
-        $keyboard[] = [['text' => '➕ 添加新关键词', 'callback_data' => 'keyword_add']];
-        $keyboard[] = [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', ['inline_keyboard' => $keyboard]);
+        $keyboard[] = [[
+            'text' => '添加新关键词', 
+            'callback_data' => 'keyword_add',
+            'icon_custom_emoji_id' => '5775937998948404844'
+        ]];
+        $keyboard[] = [[
+            'text' => '返回主菜单', 
+            'callback_data' => 'menu_main',
+            'icon_custom_emoji_id' => '5877629862306385808'
+        ]];
+        
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', ['inline_keyboard' => $keyboard]);
     }
     elseif ($callback_data === 'keyword_add') {
         setUserState($conn, $admin_id, 'awaiting_keyword_new_word');
-        $text = "请发送您要添加的新关键词 (例如: `你好`)。";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'menu_keywords_list']]]];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        $text = "<tg-emoji emoji-id=\"5775937998948404844\">➕</tg-emoji> <b>添加新关键词</b>\n\n请发送您要添加的关键词内容。";
+        
+        $markup = [
+            'inline_keyboard' => [[
+                [
+                    'text' => '取消', 
+                    'callback_data' => 'menu_keywords_list',
+                    'icon_custom_emoji_id' => '5877629862306385808'
+                ]
+            ]]
+        ];
+        
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
-
-    
-
     // --- 统计与用户管理 ---
     elseif ($callback_data === 'menu_stats') {
-         $total_users = getTotalUserCount($conn);
-         $admin_count = getAdminCount($conn);
-         $banned_count = getBannedUserCount($conn);
-         $stats_message = "📊 **系统用户数据统计**\n\n" .
-                          "┣ 总用户数: `{$total_users}`\n" .
-                          "┣ 管理员数量: `{$admin_count}`\n" .
-                          "┗ 封禁用户数量: `{$banned_count}`";
-         $markup = ['inline_keyboard' => [[['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]]];
-         editTelegramMessage($admin_id, $message_id, $stats_message, 'Markdown', $markup);
+        $total_users = getTotalUserCount($conn);
+        $admin_count = getAdminCount($conn);
+        $banned_count = getBannedUserCount($conn);
+        
+        $stats_message = "<tg-emoji emoji-id=\"5931472654660800739\">📊</tg-emoji> <b>系统用户数据统计</b>\n\n" .
+                         "┣ 总用户数: <code>{$total_users}</code>\n" .
+                         "┣ 管理员数量: <code>{$admin_count}</code>\n" .
+                         "┗ 封禁用户数量: <code>{$banned_count}</code>";
+        
+        $markup = [
+            'inline_keyboard' => [
+                [
+                    [
+                        'text' => '返回主菜单', 
+                        'callback_data' => 'menu_main',
+                        'icon_custom_emoji_id' => '5877629862306385808' 
+                    ]
+                ]
+            ]
+        ];
+        
+        editTelegramMessage($admin_id, $message_id, $stats_message, 'HTML', $markup);
     }
-    // 在 switch ($callback_data) 或 if-else 链中添加
+    // 清理callback
     elseif ($callback_data === 'admin_clear_keywords') {
-    // 写入一个空的 JSON 数组
         if (reconstructAndWriteGuanjianciFile([])) {
             answerCallbackQuery($callback_query_id, "✅ 文件已清理并初始化为 JSON 格式", true);
-        // 刷新页面
-            $text = "🤖 **关键词管理**\n\n库已清空，请重新添加。";
-            $markup = ['inline_keyboard' => [
-                [['text' => '➕ 添加新关键词', 'callback_data' => 'keyword_add']],
-                [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]
-            ]];
-            editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+            $text = "<tg-emoji emoji-id=\"6005570495603282482\">🔑</tg-emoji> <b>关键词管理</b>\n\n库已清空，请重新添加。";
+            $markup = [
+                'inline_keyboard' => [
+                    [
+                        [
+                            'text' => '添加新关键词', 
+                            'callback_data' => 'keyword_add',
+                            'icon_custom_emoji_id' => '5775937998948404844'
+                        ]
+                    ],
+                    [
+                        [
+                            'text' => '返回主菜单', 
+                            'callback_data' => 'menu_main',
+                            'icon_custom_emoji_id' => '5877629862306385808'
+                        ]
+                    ]
+                ]
+            ];
+            editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
         } else {
             answerCallbackQuery($callback_query_id, "❌ 清理失败，请检查文件权限", true);
         }
     }
 
-    elseif ($callback_data === 'menu_user_management') {
-        $text = "👥 **用户管理**\n\n请选择要进行的操作：";
-        $markup = [
-            'inline_keyboard' => [
-                [['text' => '🚫 查看封禁用户', 'callback_data' => 'admin_view_banned_users_page_1']],
-                [['text' => '👑 查看管理员', 'callback_data' => 'admin_view_admins']],
-                [['text' => '🔙 返回主菜单', 'callback_data' => 'menu_main']]
+elseif ($callback_data === 'menu_user_management') {
+    $text = "<tg-emoji emoji-id=\"5942877472163892475\">👥</tg-emoji> <b>用户管理</b>\n\n请选择要进行的操作：";
+    
+    $markup = [
+        'inline_keyboard' => [
+            [
+                [
+                    'text' => '查看封禁用户', 
+                    'callback_data' => 'admin_view_banned_users_page_1',
+                    'pay' => false, 
+                    'icon_custom_emoji_id' => '5922712343011135025' 
+                ]
+            ],
+            [
+                [
+                    'text' => '查看管理员', 
+                    'callback_data' => 'admin_view_admins',
+                    'icon_custom_emoji_id' => '5807868868886009920'
+                ]
+            ],
+            [
+                [
+                    'text' => '返回主菜单', 
+                    'callback_data' => 'menu_main',
+                    'icon_custom_emoji_id' => '5877629862306385808'
+                ]
             ]
-        ];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
-    }
-     elseif (preg_match('/^admin_view_banned_users_page_(\d+)$/', $callback_data, $matches)) {
+        ]
+    ];
+
+    editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
+}
+    elseif (preg_match('/^admin_view_banned_users_page_(\d+)$/', $callback_data, $matches)) {
         $page = (int)$matches[1];
         $per_page = 5;
         $banned_data = getBannedUsersPaginated($conn, $page, $per_page);
-        $text = "🚫 **封禁用户列表 (第 {$page} / {$banned_data['total_pages']} 页)**\n\n";
+        $text = "<tg-emoji emoji-id=\"5922712343011135025\">🚫</tg-emoji> <b>封禁用户列表 (第 {$page} / {$banned_data['total_pages']} 页)</b>\n\n";
         
         if (empty($banned_data['users'])) {
             $text .= "目前没有被封禁的用户。\n";
         } else {
             foreach ($banned_data['users'] as $user) {
-                $user_display = escapeMarkdown($user['username'] ? "@{$user['username']}" : trim($user['first_name'] . " " . $user['last_name']));
-                $text .= " • `{$user['id']}` - {$user_display}\n";
+                $user_display = htmlspecialchars($user['username'] ? "@{$user['username']}" : trim($user['first_name'] . " " . $user['last_name']));
+                $text .= " • <code>{$user['id']}</code> - {$user_display}\n";
             }
         }
-
-        $text .= "\n发送 `/ban 用户ID` 来封禁用户。\n发送 `/unban 用户ID` 来解除封禁。";
-
-        $pagination_buttons = [];
-        if ($page > 1) $pagination_buttons[] = ['text' => '◀️', 'callback_data' => 'admin_view_banned_users_page_' . ($page - 1)];
-        if ($page < $banned_data['total_pages']) $pagination_buttons[] = ['text' => '▶️', 'callback_data' => 'admin_view_banned_users_page_' . ($page + 1)];
+        $text .= "\n发送 <code>/ban 用户ID</code> 来封禁用户。\n发送 <code>/unban 用户ID</code> 来解除封禁。";
+        $pagination_row = [];
+        if ($page > 1) {
+            $pagination_row[] = [
+                'text' => '上一页', 
+                'callback_data' => 'admin_view_banned_users_page_' . ($page - 1),
+                'icon_custom_emoji_id' => '5877536313623711363'
+            ];
+        }
+        if ($page < $banned_data['total_pages']) {
+            $pagination_row[] = [
+                'text' => '下一页', 
+                'callback_data' => 'admin_view_banned_users_page_' . ($page + 1),
+                'icon_custom_emoji_id' => '5875506366050734240'
+            ];
+        }
         
         $markup = ['inline_keyboard' => []];
-        if (!empty($pagination_buttons)) $markup['inline_keyboard'][] = $pagination_buttons;
-        $markup['inline_keyboard'][] = [['text' => '🔙 返回', 'callback_data' => 'menu_user_management']];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        if (!empty($pagination_row)) {
+            $markup['inline_keyboard'][] = $pagination_row;
+        }
+        $markup['inline_keyboard'][] = [[
+            'text' => '返回', 
+            'callback_data' => 'menu_user_management',
+            'icon_custom_emoji_id' => '5877629862306385808'
+        ]];
+
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
     elseif ($callback_data === 'admin_view_admins') {
         $admins = getAllAdminsWithDetails($conn);
-        $text = "👑 **管理员列表**\n\n";
+        $text = "<tg-emoji emoji-id=\"5807868868886009920\">👑</tg-emoji> <b>管理员列表</b>\n\n";
         foreach ($admins as $admin_user) {
-            $user_display = escapeMarkdown($admin_user['username'] ? "@{$admin_user['username']}" : trim($admin_user['first_name'] . " " . $admin_user['last_name']));
+            $user_display = htmlspecialchars($admin_user['username'] ? "@{$admin_user['username']}" : trim($admin_user['first_name'] . " " . $admin_user['last_name']));
             $is_main = (int)$admin_user['id'] === (int)SUB_BOT_ADMIN_ID ? " (主)" : "";
-            $text .= " • `{$admin_user['id']}` - {$user_display}{$is_main}\n";
+            $text .= " • <code>{$admin_user['id']}</code> - {$user_display}{$is_main}\n";
         }
         $markup = [
             'inline_keyboard' => [
-                [['text' => '➕ 添加', 'callback_data' => 'admin_add_admin'], ['text' => '➖ 删除', 'callback_data' => 'admin_remove_admin']],
-                [['text' => '🔙 返回', 'callback_data' => 'menu_user_management']]
+                [
+                    ['text' => '添加', 'callback_data' => 'admin_add_admin', 'icon_custom_emoji_id' => '5775937998948404844'],
+                    ['text' => '删除', 'callback_data' => 'admin_remove_admin', 'icon_custom_emoji_id' => '5877413297170419326']
+                ],
+                [
+                    ['text' => '返回', 'callback_data' => 'menu_user_management', 'icon_custom_emoji_id' => '5877629862306385808']
+                ]
             ]
         ];
-        editTelegramMessage($admin_id, $message_id, $text, 'Markdown', $markup);
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
     elseif ($callback_data === 'admin_add_admin') {
         setUserState($conn, $admin_id, 'awaiting_add_admin_id');
-        $text = "请输入要添加为管理员的用户 ID。\n该用户必须先启动过机器人。";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'admin_view_admins']]]];
-        editTelegramMessage($admin_id, $message_id, $text, null, $markup);
+        $text = "<tg-emoji emoji-id=\"5920090136627908485\">👑</tg-emoji> <b>请输入要添加为管理员的用户 ID</b>\n\n该用户必须先启动过机器人。";
+        $markup = [
+            'inline_keyboard' => [
+                [['text' => '取消', 'callback_data' => 'admin_view_admins', 'icon_custom_emoji_id' => '5877629862306385808']]
+            ]
+        ];
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
     elseif ($callback_data === 'admin_remove_admin') {
         setUserState($conn, $admin_id, 'awaiting_remove_admin_id');
-        $text = "请输入要移除其管理员权限的用户 ID。\n⚠️ 您不能移除自己或主管理员。";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 取消', 'callback_data' => 'admin_view_admins']]]];
-        editTelegramMessage($admin_id, $message_id, $text, null, $markup);
+        $text = "<tg-emoji emoji-id=\"5922712343011135025\">👑</tg-emoji> <b>请输入要移除其管理员权限的用户 ID</b>\n\n<tg-emoji emoji-id=\"5881702736843511327\">⚠️</tg-emoji> 您不能移除自己或主管理员。";
+        $markup = [
+            'inline_keyboard' => [
+                [['text' => '取消', 'callback_data' => 'admin_view_admins', 'icon_custom_emoji_id' => '5877629862306385808']]
+            ]
+        ];
+        editTelegramMessage($admin_id, $message_id, $text, 'HTML', $markup);
     }
     
     // --- 用户封禁---
-    elseif (preg_match('/^ban_(\d+)$/', $callback_data, $matches)) {
+elseif (preg_match('/^ban_(\d+)$/', $callback_data, $matches)) {
         $target_user_id = (int)$matches[1];
         if ($conn && updateUserRole($conn, $target_user_id, 'ban')) {
             answerCallbackQuery($callback_query_id, "用户 ID: {$target_user_id} 已被封禁！", true);
-            sendTelegramMessage($target_user_id, "您已被管理员封禁。您发送的消息将不会被转发给管理员。");
+            $ban_message = "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> <b>您已被管理员封禁。</b>\n\n您发送的消息将不会被转发给管理员。";
+            sendTelegramMessage($target_user_id, $ban_message, 'HTML');
         } else {
             answerCallbackQuery($callback_query_id, "操作失败！", true);
         }
@@ -1547,25 +1825,19 @@ if (isset($update['message'])) {
     $last_name = $message['from']['last_name'] ?? null;
 
 if ($user_id) {
-    // 只在已注册的情况下更新用户信息和角色
 if ($user_id) {
-    // 检查是否是 /start 命令
     $is_start_command = (strtolower(trim($text)) === '/start');
     
     if ($is_start_command) {
-        // /start 命令：立即注册用户
         registerUser($conn, $user_id, $username, $first_name, $last_name);
         $user_role = getUserRole($conn, $user_id);
     } elseif (isUserRegistered($conn, $user_id)) {
-        // 已注册用户：更新信息和角色
         registerUser($conn, $user_id, $username, $first_name, $last_name);
         $user_role = getUserRole($conn, $user_id);
     } else {
-        // 未注册用户发送非/start消息：标记为未注册
         $user_role = 'unregistered';
     }
     } else {
-        // 未注册用户，设置特殊角色标识
         $user_role = 'unregistered';
     }
 }
@@ -1573,175 +1845,243 @@ if ($user_id) {
     $current_state = $user_role === 'admin' ? getUserState($conn, $user_id) : 'none';
 
 
-    if ($user_role === 'admin' && $current_state !== 'none' && strtolower(trim($text)) !== '/start') {
-
-        if (in_array($current_state, ['awaiting_start_text', 'awaiting_start_buttons', 'awaiting_start_media', 'awaiting_keyboard'])) {
-            $success = false;
-            if ($current_state === 'awaiting_start_text') $success = updateStartMessageInConfig($text);
-            elseif ($current_state === 'awaiting_start_buttons') $success = writeAnnniuFileContent((strtolower(trim($text)) === 'none') ? '' : $text);
-            elseif ($current_state === 'awaiting_start_media') $success = updateStartImageInConfig((strtolower(trim($text)) === 'none') ? '' : trim($text));
-            elseif ($current_state === 'awaiting_keyboard') $success = writeJianpanFileContent((strtolower(trim($text)) === 'none') ? '' : $text);
+if ($user_role === 'admin' && $current_state !== 'none' && strtolower(trim($text)) !== '/start') {
+    if (in_array($current_state, ['awaiting_start_text', 'awaiting_start_buttons', 'awaiting_start_media'])) {
+        $success = false;
+        
+        if ($current_state === 'awaiting_start_text') {
+            $entities = $update['message']['entities'] ?? [];
+            $processed_text = formatTextWithEntities($text, $entities);
+            $success = updateStartMessageInConfig($processed_text);
             
-            sendTelegramMessage($chat_id, $success ? "✅ 更新成功！" : "❌ 操作失败！");
-            setUserState($conn, $user_id, 'none');
-        }
-elseif (strpos($current_state, 'awaiting_keyword_text_') === 0) {
-    $encoded_kw = substr($current_state, strlen('awaiting_keyword_text_'));
-    $entities = $update['message']['entities'] ?? [];
-    $processed_text = formatTextWithEntities($text, $entities);
-    // 3. 执行更新
-    $success = updateOrAddKeyword(base64_decode($encoded_kw), 'text', $processed_text);
-    if ($success) {
-        $message = "✅ 文本更新成功！";
-        $markup = ['inline_keyboard' => [[['text' => '🔙 返回', 'callback_data' => 'keyword_edit_' . $encoded_kw]]]];
-        sendTelegramMessage($chat_id, $message, null, $markup);
-    } else {
-        sendTelegramMessage($chat_id, "❌ 操作失败！");
-    }
-    setUserState($conn, $user_id, 'none');
-}
-        elseif (strpos($current_state, 'awaiting_keyword_url_') === 0) {
-            $encoded_kw = substr($current_state, strlen('awaiting_keyword_url_'));
-            $value = (strtolower(trim($text)) === 'none') ? '' : $text;
-            $success = updateOrAddKeyword(base64_decode($encoded_kw), 'url', $value);
             if ($success) {
-                $message = "✅ 媒体更新成功！";
-                $markup = ['inline_keyboard' => [[['text' => '🔙 返回', 'callback_data' => 'keyword_edit_' . $encoded_kw]]]];
-                sendTelegramMessage($chat_id, $message, null, $markup);
+                sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 启动文本已更新（已保留会员表情）。", 'HTML');
+                setUserState($conn, $user_id, 'none');
             } else {
-                sendTelegramMessage($chat_id, "❌ 操作失败！");
+                sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 启动文本更新失败。", 'HTML');
             }
-            setUserState($conn, $user_id, 'none');
-        }
-        elseif (strpos($current_state, 'awaiting_keyword_buttons_') === 0) {
-            $encoded_kw = substr($current_state, strlen('awaiting_keyword_buttons_'));
-            $value = (strtolower(trim($text)) === 'none') ? '' : $text;
-            $success = updateOrAddKeyword(base64_decode($encoded_kw), 'buttons_raw', $value ? explode("\n", $value) : []);
-             if ($success) {
-                $message = "✅ 按钮更新成功！";
-                $markup = ['inline_keyboard' => [[['text' => '🔙 返回', 'callback_data' => 'keyword_edit_' . $encoded_kw]]]];
-                sendTelegramMessage($chat_id, $message, null, $markup);
-            } else {
-                sendTelegramMessage($chat_id, "❌ 操作失败！");
+        } 
+        elseif ($current_state === 'awaiting_start_buttons') {
+            $success = writeAnnniuFileContent((strtolower(trim($text)) === 'none') ? '' : $text);
+            if ($success) {
+                sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 启动按钮已更新。", 'HTML');
+                setUserState($conn, $user_id, 'none');
             }
-            setUserState($conn, $user_id, 'none');
+        } 
+        elseif ($current_state === 'awaiting_start_media') {
+            $success = updateStartImageInConfig((strtolower(trim($text)) === 'none') ? '' : trim($text));
+            if ($success) {
+                sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 启动媒体已更新。", 'HTML');
+                setUserState($conn, $user_id, 'none');
+            }
         }
+    } 
+    elseif ($current_state === 'awaiting_keyboard') {
+        $text_with_ids = convertEntitiesToConfigFormat($text, $update['message']['entities'] ?? []);
+        $keyboard_structure = processRawKeyboardText($text_with_ids);
+        setUserState($conn, $user_id, 'none');
+
+        $message = $keyboard_structure 
+            ? "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 底部按钮已更新。"
+            : "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 格式识别失败，请检查输入。";
+
+        if ($keyboard_structure) {
+            $data = array_merge($keyboard_structure, ['raw_text' => $text_with_ids]);
+            writeJianpanFileContent(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        }
+        sendTelegramMessage($chat_id, $message, 'HTML');
+    }
+elseif (strpos($current_state, 'awaiting_keyword_text_') === 0) {
+    $encoded_kw = substr($current_state, 22); // 'awaiting_keyword_text_' 长度为 22
+    $processed = formatTextWithEntities($text, $update['message']['entities'] ?? []);
+    
+    $success = updateOrAddKeyword(base64_decode($encoded_kw), 'text', $processed);
+    setUserState($conn, $user_id, 'none');
+
+    $message = $success ? "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 文本更新成功！" : "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 操作失败！";
+    $markup = $success ? ['inline_keyboard' => [[
+        ['text' => '🔙 返回', 'callback_data' => 'keyword_edit_' . $encoded_kw, 'icon_custom_emoji_id' => '5877629862306385808']
+    ]]] : null;
+
+    sendTelegramMessage($chat_id, $message, 'HTML', $markup);
+}
+elseif (strpos($current_state, 'awaiting_keyword_url_') === 0) {
+    $encoded_kw = substr($current_state, 21); 
+    $value = (strtolower(trim($text)) === 'none') ? '' : $text;
+    
+    $success = updateOrAddKeyword(base64_decode($encoded_kw), 'url', $value);
+    setUserState($conn, $user_id, 'none');
+
+    $message = $success ? "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 媒体更新成功！" : "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 操作失败！";
+    $markup = $success ? ['inline_keyboard' => [[
+        ['text' => '🔙 返回', 'callback_data' => 'keyword_edit_' . $encoded_kw, 'icon_custom_emoji_id' => '5877629862306385808']
+    ]]] : null;
+
+    sendTelegramMessage($chat_id, $message, 'HTML', $markup);
+}
+elseif (strpos($current_state, 'awaiting_keyword_buttons_') === 0) {
+    $encoded_kw = substr($current_state, 25);
+    $is_none = strtolower(trim($text)) === 'none';
+    
+    $success = updateOrAddKeyword(base64_decode($encoded_kw), 'buttons_raw', $is_none ? [] : explode("\n", $text));
+    setUserState($conn, $user_id, 'none');
+
+    $message = $success ? "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 按钮更新成功！" : "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 操作失败！";
+    $markup = $success ? ['inline_keyboard' => [[
+        ['text' => '🔙 返回', 'callback_data' => 'keyword_edit_' . $encoded_kw, 'icon_custom_emoji_id' => '5877629862306385808']
+    ]]] : null;
+
+    sendTelegramMessage($chat_id, $message, 'HTML', $markup);
+}
 
         // --- 关键词添加---
-        elseif ($current_state === 'awaiting_keyword_new_word') {
-            if (updateOrAddKeyword($text, 'text', '【未设置】')) {
-                setUserState($conn, $user_id, 'none');
-                $message = "✅ 关键词 `".escapeMarkdown($text)."` 已成功创建。\n\n您现在可以从列表中选择它进行编辑，以设置回复文本、媒体和按钮。";
-                $markup = ['inline_keyboard' => [[['text' => '🔙 返回列表', 'callback_data' => 'menu_keywords_list']]]];
-                sendTelegramMessage($chat_id, $message, 'Markdown', $markup);
-            } else {
-                sendTelegramMessage($chat_id, "❌ 添加关键词失败。可能关键词已存在或文件写入错误。");
-                setUserState($conn, $user_id, 'none');
-            }
-        }
+elseif ($current_state === 'awaiting_keyword_new_word') {
+    $success = updateOrAddKeyword($text, 'text', '【未设置】');
+    setUserState($conn, $user_id, 'none');
+
+    $message = $success 
+        ? " <tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 关键词 <code>" . htmlspecialchars($text) . "</code> 已成功创建。\n\n您现在可以从列表中选择它进行编辑。"
+        : "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 添加关键词失败。可能已存在或写入错误。";
+
+    $markup = $success ? [
+        'inline_keyboard' => [[
+            ['text' => '返回列表', 'callback_data' => 'menu_keywords_list', 'icon_custom_emoji_id' => '5877629862306385808']
+        ]]
+    ] : null;
+
+    sendTelegramMessage($chat_id, $message, 'HTML', $markup);
+}
 
         // --- 用户管理 ---
-        elseif ($current_state === 'awaiting_add_admin_id') {
+elseif ($current_state === 'awaiting_add_admin_id') {
             if (is_numeric($text)) {
                 $target_user_id = (int)trim($text);
                 if (isUserRegistered($conn, $target_user_id)) {
                     if (updateUserRole($conn, $target_user_id, 'admin')) {
-                        sendTelegramMessage($chat_id, "✅ 用户 `{$target_user_id}` 已设为管理员。", 'Markdown');
-                        sendTelegramMessage($target_user_id, "您已被设为机器人管理员。发送 /start 查看菜单。");
+                        sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 用户 <code>{$target_user_id}</code> 已设为管理员。", 'HTML');
+                        sendTelegramMessage($target_user_id, "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 您已被设为机器人管理员。发送 /start 查看菜单。", 'HTML');
                     }
-                } else { sendTelegramMessage($chat_id, "❌ 用户不存在或未启动机器人。", 'Markdown'); }
-            } else { sendTelegramMessage($chat_id, "❌ 输入无效，请输入纯数字ID。"); }
+                } else { 
+                    sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 用户不存在或未启动机器人。", 'HTML'); 
+                }
+            } else { 
+                sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 输入无效，请输入纯数字ID。", 'HTML'); 
+            }
             setUserState($conn, $user_id, 'none');
         }
         elseif ($current_state === 'awaiting_remove_admin_id') {
             if (is_numeric($text)) {
                 $target_user_id = (int)trim($text);
-                if ($target_user_id === $user_id) { sendTelegramMessage($chat_id, "❌ 您不能移除自己。"); }
-                elseif ($target_user_id === (int)SUB_BOT_ADMIN_ID) { sendTelegramMessage($chat_id, "❌ 您不能移除主管理员。"); }
+                if ($target_user_id === $user_id) { 
+                    sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 您不能移除自己。", 'HTML'); 
+                }
+                elseif ($target_user_id === (int)SUB_BOT_ADMIN_ID) { 
+                    sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 您不能移除主管理员。", 'HTML'); 
+                }
                 else {
                     if (updateUserRole($conn, $target_user_id, 'user')) {
-                        sendTelegramMessage($chat_id, "✅ 用户 `{$target_user_id}` 管理权限已移除。", 'Markdown');
-                        sendTelegramMessage($target_user_id, "您的机器人管理员权限已被移除。");
+                        sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 用户 <code>{$target_user_id}</code> 管理权限已移除。", 'HTML');
+                        sendTelegramMessage($target_user_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 您的机器人管理员权限已被移除。", 'HTML');
                     }
                 }
-            } else { sendTelegramMessage($chat_id, "❌ 输入无效，请输入纯数字ID。"); }
+            } else { 
+                sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 输入无效，请输入纯数字ID。", 'HTML'); 
+            }
             setUserState($conn, $user_id, 'none');
         }
 
         if (isset($conn) && $conn) $conn->close();
-        exit();
+         exit();
     }
-
 
     // --- 处理管理员回复消息 ---
-    if (isset($message['reply_to_message'])) {
-        $reply_to_message = $message['reply_to_message'];
-        $replied_text = $reply_to_message['text'] ?? $reply_to_message['caption'] ?? '';
-
-        if ($user_role === 'admin' && preg_match('/ID: (\d+)/', $replied_text, $matches)) {
-            $target_user_id = (int)$matches[1];
-            if (copyTelegramMessage($target_user_id, $chat_id, $message['message_id'])) {
-                sendTelegramMessage($chat_id, "✅ 回复已发送给用户 ID: {$target_user_id}");
-            } else {
-                sendTelegramMessage($chat_id, "❌ 发送失败，用户可能已屏蔽Bot。");
-            }
-            if (isset($conn) && $conn) $conn->close();
-            exit(); 
-        }
-    }
-        // --- 2./start ---
-    if (strtolower(trim($text)) === '/start') {
-        if ($user_id) setUserState($conn, $user_id, 'none');
-        
-        $reply_keyboard_markup = parseJianpanFile();
-        $inline_keyboard_markup = parseAnnniuFile();
-        $start_img_url = getConfigValue('STARTIMG');
-        $start_message = str_replace("\\n", "\n", getConfigValue('STARTMESSAGE') ?? "");
-        
-        // 替换变量
-        $user_info = ['id' => $user_id, 'username' => $username, 'first_name' => $first_name, 'last_name' => $last_name];
-        $start_message = replaceUserVariables($start_message, $user_info);
-
-        $ads_value = getConfigValue('ADS'); 
-        
-        if ($ads_value && getBotCostStatus($conn) === 'free') {
-            $start_message .= "\n\n" . $ads_value; 
-        }
-        
-        // 发送给用户的启动消息
-        sendResponse($chat_id, $start_message, $start_img_url, $inline_keyboard_markup, $reply_keyboard_markup);
-
-        // 如果是管理员，再额外发送管理面板
-        if ($user_role === 'admin') {
-            $admin_menu = getAdminMainMenu($conn);
-            sendTelegramMessage($chat_id, $admin_menu['text'], null, $admin_menu['markup']);
-        }
-        elseif ($user_role === 'user') {
-            $username_display = $username ? "@{$username}" : trim($first_name . " " . $last_name);
-            $admin_notification = "新用户启动通知\n用户: {$username_display}\nID: {$user_id}\n\n请回复此条消息来回复客户。";
-            $admin_ids = getAllAdmins($conn); 
-            $keyboard = ['inline_keyboard' => [[['text' => '永久封禁该用户 🚫', 'callback_data' => "ban_{$user_id}"]]]];
+if (isset($message['reply_to_message'])) {
+    $reply_to_message = $message['reply_to_message'];
+    $replied_text = $reply_to_message['text'] ?? $reply_to_message['caption'] ?? '';
+    if ($user_role === 'admin' && preg_match('/ID: (\d+)/', $replied_text, $matches)) {
+        $target_user_id = (int)$matches[1];
+        if (copyTelegramMessage($target_user_id, $chat_id, $message['message_id'])) {
+            $success_msg = "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> <b>回复成功</b>\n";
             
-            foreach ($admin_ids as $admin_id) {
-                if((int)$admin_id !== (int)$user_id) sendTelegramMessage($admin_id, $admin_notification, null, $keyboard);
+            sendTelegramMessage($chat_id, $success_msg, 'HTML');
+        } else {
+            $fail_msg = "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> <b>发送失败</b>\n原因：用户可能已屏蔽机器人或 ID 无效。";
+            
+            sendTelegramMessage($chat_id, $fail_msg, 'HTML');
+        }
+
+        if (isset($conn) && $conn) $conn->close();
+        exit(); 
+    }
+}
+        // --- 2./start ---
+if (strtolower(trim($text)) === '/start') {
+    if ($user_id) setUserState($conn, $user_id, 'none');
+    
+    $reply_keyboard_markup = parseJianpanFile();
+    $inline_keyboard_markup = parseAnnniuFile();
+    $start_img_url = getConfigValue('STARTIMG');
+    $start_message = str_replace("\\n", "\n", getConfigValue('STARTMESSAGE') ?? "");
+    
+    // 替换变量
+    $user_info = ['id' => $user_id, 'username' => $username, 'first_name' => $first_name, 'last_name' => $last_name];
+    $start_message = replaceUserVariables($start_message, $user_info);
+
+    $ads_value = getConfigValue('ADS'); 
+    
+    if ($ads_value && getBotCostStatus($conn) === 'free') {
+        $start_message .= "\n\n" . $ads_value; 
+    }
+
+    // 发送给启动用户的响应
+    sendResponse($chat_id, $start_message, $start_img_url, $inline_keyboard_markup, $reply_keyboard_markup);
+
+    // 管理员逻辑
+    if ($user_role === 'admin') {
+        $admin_menu = getAdminMainMenu($conn);
+        sendTelegramMessage($chat_id, $admin_menu['text'], null, $admin_menu['markup']);
+    } 
+    // 普通用户启动，通知所有管理员
+    elseif ($user_role === 'user') {
+        $username_display = $username ? "@{$username}" : trim($first_name . " " . $last_name);
+        $admin_notification = "<tg-emoji emoji-id=\"5922612721244704425\">👀</tg-emoji><b>新用户启动通知</b>\n" .
+                              "<tg-emoji emoji-id=\"5920344347152224466\">👤</tg-emoji>用户: {$username_display}\n" .
+                              "<tg-emoji emoji-id=\"5846008814129649022\">🆔</tg-emoji>ID: <code>{$user_id}</code>\n\n" .
+                              "<tg-emoji emoji-id=\"5877468380125990242\">💬</tg-emoji><i>请回复此条消息来回复客户。</i>";
+        
+        $admin_ids = getAllAdmins($conn); 
+        $keyboard = [
+            'inline_keyboard' => [[
+                [
+                    'text' => '永久封禁该用户', 
+                    'callback_data' => "ban_{$user_id}",
+                    'icon_custom_emoji_id' => '5922712343011135025' 
+                ]
+            ]]
+        ];
+
+        foreach ($admin_ids as $admin_id) {
+            if ((int)$admin_id !== (int)$user_id) {
+                sendTelegramMessage($admin_id, $admin_notification, 'HTML', $keyboard);
             }
         }
     }
+}
 
 
     
-    elseif ($user_role === 'admin' && strtolower(substr(trim($text), 0, 4)) === '/ban') {
+elseif ($user_role === 'admin' && strtolower(substr(trim($text), 0, 4)) === '/ban') {
         $parts = explode(' ', $text);
         if (count($parts) === 2 && is_numeric($parts[1])) {
             $target_user_id = (int)$parts[1];
             if (updateUserRole($conn, $target_user_id, 'ban')) {
-                sendTelegramMessage($chat_id, "✅ 用户 `{$target_user_id}` 已被封禁。", 'Markdown');
-                sendTelegramMessage($target_user_id, "您已被管理员封禁。您发送的消息将不会被转发给管理员。");
+                sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 用户 <code>{$target_user_id}</code> 已被封禁。", 'HTML');
+                sendTelegramMessage($target_user_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji>您已被管理员封禁。您发送的消息将不会被转发给管理员。", 'HTML');
             } else {
-                 sendTelegramMessage($chat_id, "❌ 操作失败，可能用户不存在或数据库错误。", 'Markdown');
+                 sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 操作失败，可能用户不存在或数据库错误。", 'HTML');
             }
         } else {
-            sendTelegramMessage($chat_id, "❌ 命令格式错误。请使用 `/ban 用户ID`。");
+            sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 命令格式错误。请使用 <code>/ban 用户ID</code>。", 'HTML');
         }
         if (isset($conn) && $conn) $conn->close();
         exit();
@@ -1751,81 +2091,96 @@ elseif (strpos($current_state, 'awaiting_keyword_text_') === 0) {
         if (count($parts) === 2 && is_numeric($parts[1])) {
             $target_user_id = (int)$parts[1];
             if (updateUserRole($conn, $target_user_id, 'user')) {
-                sendTelegramMessage($chat_id, "✅ 用户 `{$target_user_id}` 已解除封禁。", 'Markdown');
-                sendTelegramMessage($target_user_id, "您的封禁已被解除。");
+                sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 用户 <code>{$target_user_id}</code> 已解除封禁。", 'HTML');
+                sendTelegramMessage($target_user_id, "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji>您的封禁已被解除。", 'HTML');
             }
         } else {
-            sendTelegramMessage($chat_id, "❌ 命令格式错误。请使用 `/unban 用户ID`。");
+            sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 命令格式错误。请使用 <code>/unban 用户ID</code>。", 'HTML');
         }
         if (isset($conn) && $conn) $conn->close();
         exit();
     }
     
- elseif ($user_role === 'admin' && (
-    (isset($message['text']) && strtolower(substr(trim($message['text']), 0, 3)) === '/gb') || 
-    (isset($message['caption']) && strtolower(substr(trim($message['caption']), 0, 3)) === '/gb')
+// 广播逻辑
+elseif ($user_role === 'admin' && (
+    (isset($message['text']) && strpos(trim($message['text']), '/gb') === 0) || 
+    (isset($message['caption']) && strpos(trim($message['caption']), '/gb') === 0)
 )) {
     $broadcast_text = '';
     $broadcast_photo_id = null;
+    $convert_to_html = function($msg_obj) {
+        $raw_text = $msg_obj['text'] ?? $msg_obj['caption'] ?? '';
+        $entities = $msg_obj['entities'] ?? $msg_obj['caption_entities'] ?? [];
+        $command_length = 3; 
+        if (mb_substr(trim($raw_text), 3, 1) === ' ') {
+            $command_length = 4; 
+        }
+        $pure_text = mb_substr(trim($raw_text), $command_length, null, 'UTF-8');
+        $processed_text = htmlspecialchars($pure_text, ENT_QUOTES, 'UTF-8');
+        if (empty($entities)) return $processed_text;
+        $emoji_entities = array_filter($entities, function($e) use ($command_length) {
+            return $e['type'] === 'custom_emoji' && $e['offset'] >= $command_length;
+        });
+        usort($emoji_entities, function($a, $b) {
+            return $b['offset'] - $a['offset'];
+        });
 
-    // 提取广播内容
+        foreach ($emoji_entities as $entity) {
+            $offset = $entity['offset'] - $command_length;
+            $length = $entity['length'];
+            $emoji_id = $entity['custom_emoji_id'];
+            $original_char = mb_substr($pure_text, $offset, $length, 'UTF-8');
+            $html_emoji = "<tg-emoji emoji-id=\"{$emoji_id}\">{$original_char}</tg-emoji>";
+            
+            $before = mb_substr($processed_text, 0, $offset, 'UTF-8');
+            $after = mb_substr($processed_text, $offset + $length, null, 'UTF-8');
+            $processed_text = $before . $html_emoji . $after;
+        }
+        return $processed_text;
+    };
+    $broadcast_text = $convert_to_html($message);
     if (isset($message['photo'])) {
         $broadcast_photo_id = $message['photo'][count($message['photo']) - 1]['file_id'];
-        $caption = $message['caption'] ?? '';
-        $broadcast_text = ltrim(substr(trim($caption), 3));
-    } else {
-        $text_from_msg = $message['text'] ?? '';
-        $broadcast_text = ltrim(substr(trim($text_from_msg), 3));
     }
-    
-    // 验证内容
-    if (empty(trim($broadcast_text)) && $broadcast_photo_id === null) {
-        sendTelegramMessage($chat_id, "⚠️ 广播内容不能为空。用法: `/gb <文字>` 或发送图片并附上 `/gb <文字>` 作为标题。");
+    if (empty(trim(strip_tags($broadcast_text))) && $broadcast_photo_id === null) {
+        sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5881702736843511327\">⚠️</tg-emoji> 广播内容不能为空。");
         if (isset($conn) && $conn) $conn->close();
         exit();
     }
-
-    // 获取所有用户(排除当前管理员)
     $all_user_ids = array_diff(getAllUserIds($conn), [$user_id]);
     $total_users = count($all_user_ids);
     
     if ($total_users === 0) {
-        sendTelegramMessage($chat_id, "⚠️ 数据库中没有其他用户可以进行广播。");
+        sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5881702736843511327\">⚠️</tg-emoji> 数据库中没有其他用户。");
         if (isset($conn) && $conn) $conn->close();
         exit();
     }
-    // 立即回复管理员,任务已提交
-    sendTelegramMessage($chat_id, "📤 广播任务已提交到后台处理...\n目标用户: {$total_users} 人。\n\n请稍等,完成后将向您发送报告。");
-
-    // 准备 POST 参数
+    sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5877540355187937244\">📤</tg-emoji> 广播任务已提交...\n<tg-emoji emoji-id=\"55942877472163892475\">👥</tg-emoji>目标: {$total_users} 人。", "HTML");
     $post_data = [
         'token' => BOT_TOKEN,
         'text' => $broadcast_text,
         'photo' => $broadcast_photo_id ?? '',
         'users' => json_encode($all_user_ids),
-        'admin_id' => $chat_id
+        'admin_id' => $chat_id,
+        'parse_mode' => 'HTML' 
     ];
 
-    // 异步触发广播脚本(使用 curl 非阻塞方式)
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, BROADCAST_SCRIPT_URL);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($post_data));
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 2); // 仅等待2秒,让任务在后台运行
+    curl_setopt($ch, CURLOPT_TIMEOUT, 2);
     curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     
-    // 执行请求但不等待完整响应
     curl_exec($ch);
     curl_close($ch);
     
-    // 主脚本立即返回,不阻塞 webhook
     if (isset($conn) && $conn) $conn->close();
     exit();
 }
-//验证角色
+// 验证角色
 elseif ($user_role !== 'admin' && $user_role !== 'ban' && $user_role !== 'unregistered') {
 
     if (!empty($text)) {
@@ -1837,8 +2192,6 @@ elseif ($user_role !== 'admin' && $user_role !== 'ban' && $user_role !== 'unregi
                 if (strpos($user_input_normalized, (string)$keyword) !== false) {
                     $user_info = ['id' => $user_id, 'username' => $username, 'first_name' => $first_name, 'last_name' => $last_name];
                     $response_config['text'] = replaceKeywordVariables($response_config['text'], $user_info);
-                    
-                    // 使用 sendTelegramMessage 直接发送，确保 HTML 解析模式
                     if (!empty($response_config['url']) && filter_var($response_config['url'], FILTER_VALIDATE_URL)) {
                         // 有媒体URL的情况
                         $path = parse_url($response_config['url'], PHP_URL_PATH);
@@ -1862,10 +2215,10 @@ elseif ($user_role !== 'admin' && $user_role !== 'ban' && $user_role !== 'unregi
 if ($user_role === 'user' && $user_id && isUserRegistered($conn, $user_id)) {
         $admin_ids = getAllAdmins($conn);
         if (!empty($admin_ids)) {
-            $metadata_message = "回复目标\n上一条消息是客户的原消息.\n请回复此条消息来回复客户.\n客户 ID: {$user_id}"; 
+            $metadata_message = "<tg-emoji emoji-id=\"5954175920506933873\">👤</tg-emoji>回复目标\n上一条消息是客户的原消息.\n<tg-emoji emoji-id=\"5877468380125990242\">💬</tg-emoji>请回复此条消息来回复客户.\n客户 ID: {$user_id}"; 
             foreach ($admin_ids as $admin_id) {
                 forwardTelegramMessage($admin_id, $chat_id, $message['message_id']);
-                sendTelegramMessage($admin_id, $metadata_message, null);
+                sendTelegramMessage($admin_id, $metadata_message, HTML);
             }
         }
     }
