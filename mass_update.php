@@ -35,7 +35,7 @@ function sendTelegramMsg($chat_id, $text) {
     $params = [
         'chat_id' => $chat_id,
         'text' => $text,
-        'parse_mode' => 'Markdown'
+        'parse_mode' => 'HTML'
     ];
     
     $ch = curl_init();
@@ -51,13 +51,13 @@ function sendTelegramMsg($chat_id, $text) {
 
 $conn = connectDB();
 if (!$conn) {
-    sendTelegramMsg($admin_chat_id, "❌ 批量更新失败：数据库连接错误。");
+    sendTelegramMsg($admin_chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 批量更新失败：数据库连接错误。");
     exit;
 }
 
 // 检查源文件是否存在
 if (!file_exists(COPY_SOURCE_FILE)) {
-    sendTelegramMsg($admin_chat_id, "❌ 批量更新失败：源文件 `/copy/bot.php` 不存在。");
+    sendTelegramMsg($admin_chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 批量更新失败：源文件 `/copy/bot.php` 不存在。");
     exit;
 }
 
@@ -66,7 +66,7 @@ $sql = "SELECT owner_id, bot_token, bot_username, secret_token FROM `token`";
 $result = $conn->query($sql);
 
 if (!$result) {
-    sendTelegramMsg($admin_chat_id, "❌ 批量更新失败：查询 Token 表失败。");
+    sendTelegramMsg($admin_chat_id, "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 批量更新失败：查询 Token 表失败。");
     exit;
 }
 
@@ -75,7 +75,7 @@ $total_bots = count($bots);
 $success_count = 0;
 $fail_count = 0;
 
-sendTelegramMsg($admin_chat_id, "⏳ 开始处理 {$total_bots} 个机器人，请耐心等待...");
+sendTelegramMsg($admin_chat_id, "<tg-emoji emoji-id=\"5900104897885376843\">⏳</tg-emoji> 开始处理 {$total_bots} 个机器人，请耐心等待...");
 
 // read
 $source_content = file_get_contents(COPY_SOURCE_FILE);
@@ -158,12 +158,12 @@ foreach ($bots as $bot) {
 }
 
 // msg
-$msg = "✅ *批量更新完成*\n\n";
-$msg .= "🤖 总数: `{$total_bots}`\n";
-$msg .= "✅ 成功: `{$success_count}`\n";
-$msg .= "❌ 失败: `{$fail_count}`\n";
-$msg .= "📄 核心代码已从 `/copy/bot.php` 同步。\n";
-$msg .= "🔗 Webhook 已重新注册。";
+$msg = "<tg-emoji emoji-id=\"5985780596268339498\">✅</tg-emoji> <b>批量更新完成</b>\n\n";
+$msg .= "<tg-emoji emoji-id=\"5931415565955503486\">🤖</tg-emoji> 总数: <code>{$total_bots}</code>\n";
+$msg .= "<tg-emoji emoji-id=\"5776375003280838798\">✅</tg-emoji> 成功: <code>{$success_count}</code>\n";
+$msg .= "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 失败: <code>{$fail_count}</code>\n";
+$msg .= "<tg-emoji emoji-id=\"5936170807716745162\">📄</tg-emoji> 核心代码已从 <code>/copy/bot.php</code> 同步。\n";
+$msg .= "<tg-emoji emoji-id=\"5883964170268840032\">🔗</tg-emoji> Webhook 已重新注册。";
 
 sendTelegramMsg($admin_chat_id, $msg);
 ?>
