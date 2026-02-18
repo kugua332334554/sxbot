@@ -2284,45 +2284,61 @@ elseif ($user_role === 'admin' && (
 )) {
     $broadcast_text = '';
     $broadcast_photo_id = null;
+
     $convert_to_html = function($msg_obj) {
         $raw_text = $msg_obj['text'] ?? $msg_obj['caption'] ?? '';
+        if (empty($raw_text)) return '';
+        
+        $raw_text = trim($raw_text);
         $entities = $msg_obj['entities'] ?? $msg_obj['caption_entities'] ?? [];
-        $command_length = 3; 
-        if (mb_substr(trim($raw_text), 3, 1) === ' ') {
-            $command_length = 4; 
-        }
-        $pure_text = mb_substr(trim($raw_text), $command_length, null, 'UTF-8');
-        $processed_text = htmlspecialchars($pure_text, ENT_QUOTES, 'UTF-8');
-        if (empty($entities)) return $processed_text;
+        $command_length = (mb_substr($raw_text, 3, 1) === ' ') ? 4 : 3;
+
         $emoji_entities = array_filter($entities, function($e) use ($command_length) {
             return $e['type'] === 'custom_emoji' && $e['offset'] >= $command_length;
         });
+
+        if (empty($emoji_entities)) {
+            $pure_text = mb_substr($raw_text, $command_length, null, 'UTF-8');
+            return htmlspecialchars($pure_text, ENT_QUOTES, 'UTF-8');
+        }
+
         usort($emoji_entities, function($a, $b) {
             return $b['offset'] - $a['offset'];
         });
 
+        $text_16 = mb_convert_encoding($raw_text, 'UTF-16BE', 'UTF-8');
+
         foreach ($emoji_entities as $entity) {
-            $offset = $entity['offset'] - $command_length;
-            $length = $entity['length'];
-            $emoji_id = $entity['custom_emoji_id'];
-            $original_char = mb_substr($pure_text, $offset, $length, 'UTF-8');
-            $html_emoji = "<tg-emoji emoji-id=\"{$emoji_id}\">{$original_char}</tg-emoji>";
+            $off = $entity['offset'];
+            $len = $entity['length'];
+            $eid = $entity['custom_emoji_id'];
+
+            $before_16 = substr($text_16, 0, $off * 2);
+            $target_16 = substr($text_16, $off * 2, $len * 2);
+            $after_16 = substr($text_16, ($off + $len) * 2);
+
+            $target_8 = mb_convert_encoding($target_16, 'UTF-8', 'UTF-16BE');
+            $html_emoji = "<tg-emoji emoji-id=\"{$eid}\">" . htmlspecialchars($target_8, ENT_QUOTES, 'UTF-8') . "</tg-emoji>";
             
-            $before = mb_substr($processed_text, 0, $offset, 'UTF-8');
-            $after = mb_substr($processed_text, $offset + $length, null, 'UTF-8');
-            $processed_text = $before . $html_emoji . $after;
+            $text_16 = $before_16 . mb_convert_encoding($html_emoji, 'UTF-16BE', 'UTF-8') . $after_16;
         }
-        return $processed_text;
+
+        $processed_text = mb_convert_encoding($text_16, 'UTF-8', 'UTF-16BE');
+        return mb_substr($processed_text, $command_length, null, 'UTF-8');
     };
+
     $broadcast_text = $convert_to_html($message);
+
     if (isset($message['photo'])) {
         $broadcast_photo_id = $message['photo'][count($message['photo']) - 1]['file_id'];
     }
+
     if (empty(trim(strip_tags($broadcast_text))) && $broadcast_photo_id === null) {
         sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5881702736843511327\">⚠️</tg-emoji> 广播内容不能为空。");
         if (isset($conn) && $conn) $conn->close();
         exit();
     }
+
     $all_user_ids = array_diff(getAllUserIds($conn), [$user_id]);
     $total_users = count($all_user_ids);
     
@@ -2331,7 +2347,9 @@ elseif ($user_role === 'admin' && (
         if (isset($conn) && $conn) $conn->close();
         exit();
     }
-    sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5877540355187937244\">📤</tg-emoji> 广播任务已提交...\n<tg-emoji emoji-id=\"55942877472163892475\">👥</tg-emoji>目标: {$total_users} 人。", "HTML");
+
+    sendTelegramMessage($chat_id, "<tg-emoji emoji-id=\"5877540355187937244\">📤</tg-emoji> 广播任务已提交...\n<tg-emoji emoji-id=\"5942877472163892475\">👥</tg-emoji>目标: {$total_users} 人。", "HTML");
+
     $post_data = [
         'token' => BOT_TOKEN,
         'text' => $broadcast_text,
