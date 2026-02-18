@@ -1550,96 +1550,105 @@ if (isset($update['message'])) {
 
     $identity = getUserIdentity($user_id);
 if ($identity === 'admin' && (strpos($text, '/gb ') === 0 || strpos($caption, '/gb ') === 0)) {
+    
+    $photo_file_id = null;
+    $broadcast_text = '';
+
+    $convert_to_html = function($msg_obj) {
+        $raw_text = !empty($msg_obj['caption']) ? $msg_obj['caption'] : ($msg_obj['text'] ?? '');
+        if (empty($raw_text)) return '';
+
+        $entities = !empty($msg_obj['caption_entities']) ? $msg_obj['caption_entities'] : ($msg_obj['entities'] ?? []);
         
-        $photo_file_id = null;
-        $broadcast_text = '';
-        $convert_to_html = function($msg_obj) {
-            $raw_text = !empty($msg_obj['caption']) ? $msg_obj['caption'] : $msg_obj['text'];
-            $pure_text = mb_substr($raw_text, 4, null, 'UTF-8');
-            $entities = !empty($msg_obj['caption_entities']) ? $msg_obj['caption_entities'] : ($msg_obj['entities'] ?? []);
-            $processed_text = htmlspecialchars($pure_text, ENT_QUOTES, 'UTF-8');
-            if (empty($entities)) return $processed_text;
-            $emoji_entities = array_filter($entities, function($e) {
-                return $e['type'] === 'custom_emoji' && $e['offset'] >= 4;
-            });
+        $emoji_entities = array_filter($entities, function($e) {
+            return $e['type'] === 'custom_emoji' && $e['offset'] >= 4;
+        });
 
-            usort($emoji_entities, function($a, $b) {
-                return $b['offset'] - $a['offset'];
-            });
-
-            foreach ($emoji_entities as $entity) {
-                $offset = $entity['offset'] - 4;
-                $length = $entity['length'];
-                $emoji_id = $entity['custom_emoji_id'];
-                $original_char = mb_substr($pure_text, $offset, $length, 'UTF-8');
-                $html_emoji = "<tg-emoji emoji-id=\"{$emoji_id}\">{$original_char}</tg-emoji>";
-                $before = mb_substr($processed_text, 0, $offset, 'UTF-8');
-                $after = mb_substr($processed_text, $offset + $length, null, 'UTF-8');
-                $processed_text = $before . $html_emoji . $after;
-            }
-
-            return $processed_text;
-        };
-
-        $broadcast_text = $convert_to_html($message);
-        if (isset($message['photo'])) {
-            $photo_array = $message['photo'];
-            $photo_file_id = end($photo_array)['file_id'];
+        if (empty($emoji_entities)) {
+            return htmlspecialchars(mb_substr($raw_text, 4, null, 'UTF-8'), ENT_QUOTES, 'UTF-8');
         }
 
-        // 验证内容
-        if (empty(trim(strip_tags($broadcast_text))) && $photo_file_id === null) {
-            sendTelegramApi('sendMessage', [
-                'chat_id' => $chat_id,
-                'text' => "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 广播内容不能为空。",
-                'parse_mode' => 'HTML' 
-            ]);
-            return;
+        usort($emoji_entities, function($a, $b) {
+            return $b['offset'] - $a['offset'];
+        });
+
+        $text_utf16 = mb_convert_encoding($raw_text, 'UTF-16BE', 'UTF-8');
+
+        foreach ($emoji_entities as $entity) {
+            $offset = $entity['offset'];
+            $length = $entity['length'];
+            $emoji_id = $entity['custom_emoji_id'];
+
+            $before_16 = substr($text_utf16, 0, $offset * 2);
+            $target_16 = substr($text_utf16, $offset * 2, $length * 2);
+            $after_16 = substr($text_utf16, ($offset + $length) * 2);
+
+            $target_8 = mb_convert_encoding($target_16, 'UTF-8', 'UTF-16BE');
+            $html_emoji = "<tg-emoji emoji-id=\"{$emoji_id}\">" . htmlspecialchars($target_8, ENT_QUOTES, 'UTF-8') . "</tg-emoji>";
+            
+            $text_utf16 = $before_16 . mb_convert_encoding($html_emoji, 'UTF-16BE', 'UTF-8') . $after_16;
         }
 
-        // 获取所有用户
-        $all_users = getAllUsers();
-        $total_users = count($all_users);
+        $processed_text = mb_convert_encoding($text_utf16, 'UTF-8', 'UTF-16BE');
+        return mb_substr($processed_text, 4, null, 'UTF-8');
+    };
 
-        if ($total_users === 0) {
-            sendTelegramApi('sendMessage', [
-                'chat_id' => $chat_id,
-                'text' => "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 没有可以广播的用户",
-                'parse_mode' => 'HTML' 
-            ]);
-            return;
-        }
+    $broadcast_text = $convert_to_html($message);
 
+    if (isset($message['photo'])) {
+        $photo_array = $message['photo'];
+        $photo_file_id = end($photo_array)['file_id'];
+    }
+
+    if (empty(trim(strip_tags($broadcast_text))) && $photo_file_id === null) {
         sendTelegramApi('sendMessage', [
             'chat_id' => $chat_id,
-            'text' => "<tg-emoji emoji-id=\"5888642858533001671\">📤</tg-emoji> 广播任务已提交...\n<tg-emoji emoji-id=\"5942877472163892475\">👥</tg-emoji>目标: {$total_users} 人。",
+            'text' => "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 广播内容不能为空。",
             'parse_mode' => 'HTML' 
         ]);
-
-        $broadcast_url = MAIN_BOT_DOMAIN . '/broadcast.php';
-        
-        $post_data = [
-            'token' => BOT_TOKEN,
-            'text' => $broadcast_text, 
-            'photo' => $photo_file_id ?? '',
-            'users' => json_encode($all_users),
-            'admin_id' => $chat_id,
-            'parse_mode' => 'HTML' 
-        ];
-
-        // 异步请求发送
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $broadcast_url);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($post_data));
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 2); 
-        curl_exec($ch);
-        curl_close($ch);
-        
         return;
     }
 
+    $all_users = getAllUsers();
+    $total_users = count($all_users);
+
+    if ($total_users === 0) {
+        sendTelegramApi('sendMessage', [
+            'chat_id' => $chat_id,
+            'text' => "<tg-emoji emoji-id=\"5778527486270770928\">❌</tg-emoji> 没有可以广播的用户",
+            'parse_mode' => 'HTML' 
+        ]);
+        return;
+    }
+
+    sendTelegramApi('sendMessage', [
+        'chat_id' => $chat_id,
+        'text' => "<tg-emoji emoji-id=\"5888642858533001671\">📤</tg-emoji> 广播任务已提交...\n<tg-emoji emoji-id=\"5942877472163892475\">👥</tg-emoji>目标: {$total_users} 人。",
+        'parse_mode' => 'HTML' 
+    ]);
+
+    $broadcast_url = MAIN_BOT_DOMAIN . '/broadcast.php';
+    
+    $post_data = [
+        'token' => BOT_TOKEN,
+        'text' => $broadcast_text, 
+        'photo' => $photo_file_id ?? '',
+        'users' => json_encode($all_users),
+        'admin_id' => $chat_id,
+        'parse_mode' => 'HTML' 
+    ];
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $broadcast_url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($post_data));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 2); 
+    curl_exec($ch);
+    curl_close($ch);
+    
+    return;
+}
     $current_state = getUserState($user_id);
     if ($current_state === 'waiting_bot_token') {
         $button_texts = ['创建机器人', '我的机器人', '续费/升级', '联系客服', '个人中心', '更改语言'];
