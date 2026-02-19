@@ -485,7 +485,7 @@ function getBannedUserCount($conn) {
 // 解析关键词按钮配置字符串
 function parseKeywordButtonString($str) {
     $data = ['text' => [], 'url' => '', 'emoji' => '', 'style' => ''];
-    $color_map = ['红色' => 'danger', '蓝色' => 'primary', '绿色' => 'success', '灰色' => 'secondary'];
+    $color_map = ['红色' => 'danger', '蓝色' => 'primary', '绿色' => 'success'];
     $str = str_replace('－', '-', $str);
     $parts = explode('-', $str);
     
@@ -682,7 +682,7 @@ function parseAnnniuFile() {
                 
                 $btn = ['text' => ''];
                 $text_parts = [];
-                $color_map = ['红色'=>'danger','蓝色'=>'primary','绿色'=>'success','灰色'=>'secondary'];
+                $color_map = ['红色'=>'danger','蓝色'=>'primary','绿色'=>'success'];
 
                 foreach ($parts as $part) {
                     if (filter_var($part, FILTER_VALIDATE_URL)) {
@@ -776,7 +776,6 @@ if ($color_input) {
         '红色' => 'danger',    'danger'    => 'danger',
         '绿色' => 'success',   'success'   => 'success',
         '蓝色' => 'primary',   'primary'   => 'primary',
-        '灰色' => 'secondary', 'secondary' => 'secondary', 
     ];
     
     if (isset($style_map[$color_input])) {
@@ -1234,7 +1233,7 @@ if ($callback_data === 'menu_main') {
         $tutorial_text .= "• 点击「启动消息」→「修改内联按钮」\n";
         $tutorial_text .= "• 格式：<code>[图标+按钮名+链接+颜色] [另一按钮+链接]</code>\n";
         $tutorial_text .= "• 示例：<code>[官网+https://example.com] [频道+https://t.me/channel]</code>\n";
-        $tutorial_text .= "• 每行一排按钮\n支持颜色：蓝色，绿色，灰色，红色\n";
+        $tutorial_text .= "• 每行一排按钮\n支持颜色：蓝色，绿色，红色\n";
         
         $tutorial_text .= "<b><tg-emoji emoji-id=\"5793901252987330401\">4️⃣</tg-emoji> 底部按钮设置</b>\n";
         $tutorial_text .= "• 点击「底部按钮」输入配置\n";
@@ -1259,7 +1258,7 @@ if ($callback_data === 'menu_main') {
         $tutorial_text .= "<b>按钮格式：</b>\n";
         $tutorial_text .= "• <code>会员图标*-按钮名-URL-颜色*。带*的可以不填写。</code>\n";
         $tutorial_text .= "• 示例：<code>查看详情-https://example.com|联系客服-https://t.me/support</code>\n";
-        $tutorial_text .= "• 发送 <code>none</code> 清除按钮\n按钮支持颜色：红色，灰色，蓝色，绿色。\n";
+        $tutorial_text .= "• 发送 <code>none</code> 清除按钮\n按钮支持颜色：红色，蓝色，绿色。\n";
         
         $tutorial_text .= "<b>预览功能：</b>\n";
         $tutorial_text .= "• 编辑关键词时点击「<tg-emoji emoji-id=\"5280881372418816002\">👀</tg-emoji> 预览回复」\n";
@@ -1403,7 +1402,7 @@ if ($callback_data === 'menu_main') {
         $text .= "当前的内联按钮配置如下：\n";
         $text .= "<code>" . htmlspecialchars($current_buttons) . "</code>\n\n";
         $text .= "请发送新的配置。\n";
-        $text .= "格式示例：<code>[图标+按钮名+链接+颜色] | [另一按钮+链接]</code>\n可选颜色：蓝色，绿色，红色，灰色\n";
+        $text .= "格式示例：<code>[图标+按钮名+链接+颜色] | [另一按钮+链接]</code>\n可选颜色：蓝色，绿色，红色\n";
         $text .= "发送 <code>none</code> 可清除按钮配置。";
         
         $markup = [
@@ -1532,7 +1531,7 @@ if ($callback_data === 'menu_main') {
                     "\n\n<tg-emoji emoji-id=\"5778586619380503542\">🖼️</tg-emoji> <b>媒体URL:</b>\n<code>" . htmlspecialchars($config['url'] ?? '【未设置】') . "</code>\n\n" .
                     "\n\n<tg-emoji emoji-id=\"6008258140108231117\">🔗</tg-emoji> <b>按钮配置预览:</b>\n" . 
                     $preview_buttons . 
-                    "\n\n<i>按钮支持颜色：红色，灰色，蓝色，绿色。格式:会员图标*-按钮名-URL-颜色*。带*的可以不填写。</i>";
+                    "\n\n<i>按钮支持颜色：红色，蓝色，绿色。格式:会员图标*-按钮名-URL-颜色*。带*的可以不填写。</i>";
             
             $markup = [
                 'inline_keyboard' => [
@@ -1600,7 +1599,7 @@ if ($callback_data === 'menu_main') {
             $reply_markup = [];
             if (!empty($config['buttons_raw'])) {
                  $inline_keyboard = [];
-                 $color_map = ['红色'=>'danger','蓝色'=>'primary','绿色'=>'success','灰色'=>'secondary'];
+                 $color_map = ['红色'=>'danger','蓝色'=>'primary','绿色'=>'success'];
 
                  foreach($config['buttons_raw'] as $line) {
                     $buttons_text = explode('|', $line); 
