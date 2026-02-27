@@ -132,9 +132,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $newMassContent = str_replace(array_keys($massReplacements), array_values($massReplacements), $massContent);
 
-        if (file_put_contents($massUpdateFile, $newMassContent) === false) {
-            die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法写入 mass_update.php 文件（配置替换失败），请检查文件权限</h2></div>');
-        }
+   //     if (file_put_contents($massUpdateFile, $newMassContent) === false) {
+   //         die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：无法写入 mass_update.php 文件（配置替换失败），请检查文件权限</h2></div>');
+     //   }
 
    //     if (!rename($massUpdateFile, $targetMassUpdateFile)) {
    //         die('<div class="mdui-typo mdui-container mdui-p-a-3"><h2 class="mdui-text-color-red">错误：mass_update.php 已配置，但无法移动到 "' . htmlspecialchars($configDir) . '"。请检查文件权限或手动移动！</h2></div>');
