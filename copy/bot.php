@@ -1464,7 +1464,7 @@ if ($callback_data === 'menu_main') {
         $markup = [
             'inline_keyboard' => [[
                 [
-                    'text' => '🔙 取消', 
+                    'text' => '取消', 
                     'callback_data' => 'menu_main',
                     'icon_custom_emoji_id' => '5877629862306385808'
                 ]
